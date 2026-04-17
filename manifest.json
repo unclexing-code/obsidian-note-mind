@@ -1,0 +1,9 @@
+{
+  "id": "mindmap-notes",
+  "name": "Mindmap Notes",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Standalone mindmap files with Markdown notes drawer and map-to-map navigation.",
+  "author": "zhoushengjia",
+  "isDesktopOnly": false
+}

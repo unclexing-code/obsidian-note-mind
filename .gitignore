@@ -1,0 +1,23 @@
+node_modules/
+*.log
+.DS_Store
+.vscode/
+.idea/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Build outputs
+main.js
+main.js.map
+
+# Local env files
+.env
+.env.*
+
+# Package manager caches
+.npm/
+.pnpm-store/
+
+# Obsidian / system temp
+Thumbs.db
