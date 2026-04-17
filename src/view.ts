@@ -175,7 +175,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
       )
     ) {
       return;
@@ -192,7 +192,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
       )
     ) {
       return;
@@ -209,7 +209,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
       )
     ) {
       return;
@@ -241,6 +241,16 @@ export class MindmapView extends ItemView {
     }
   }
 
+  private unlockMobileZenWhenViewportChanges(): void {
+    if (!this.isMobileLayout || !this.isZenMode) {
+      return;
+    }
+    const activeView = this.app.workspace.getActiveViewOfType(ItemView);
+    if (activeView !== this) {
+      this.setZenMode(false);
+    }
+  }
+
   private readonly onWindowTouchStart = (event: TouchEvent): void => {
     if (!this.isZenMode || !this.isMobileLayout) {
       return;
@@ -252,7 +262,7 @@ export class MindmapView extends ItemView {
       this.handleZenCanvasTouchStart(event);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
       return;
     }
     event.stopPropagation();
@@ -270,7 +280,7 @@ export class MindmapView extends ItemView {
       this.handleZenCanvasTouchMove(event);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
       return;
     }
     event.stopPropagation();
@@ -288,7 +298,7 @@ export class MindmapView extends ItemView {
       this.handleZenCanvasTouchEnd(event);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
       return;
     }
     event.stopPropagation();
@@ -803,6 +813,7 @@ export class MindmapView extends ItemView {
       if (!node?.linkTarget?.trim()) {
         return;
       }
+      this.unlockMobileZenIfNeeded();
       void this.openLinkedTarget(node.linkTarget);
     });
     this.mobileSyncButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sync-button", text: "同步" });
@@ -911,6 +922,7 @@ export class MindmapView extends ItemView {
       if (!node?.linkTarget?.trim()) {
         return;
       }
+      this.unlockMobileZenIfNeeded();
       void this.openLinkedTarget(node.linkTarget);
     });
     this.nodeLinkInputEl.addEventListener("input", () => {
@@ -973,6 +985,9 @@ export class MindmapView extends ItemView {
         return;
       }
       void this.reloadFromDisk(false);
+    }));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
+      this.unlockMobileZenWhenViewportChanges();
     }));
 
     await this.loadFromFile();
@@ -1246,9 +1261,9 @@ export class MindmapView extends ItemView {
       const titleHasLink = !!node.linkTarget?.trim();
       const titleBox = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
       titleBox.setAttribute("x", String(-size.width / 2 + 10));
-      titleBox.setAttribute("y", String(-size.height / 2 + 8));
+      titleBox.setAttribute("y", String(-size.height / 2 + 6));
       titleBox.setAttribute("width", String(size.width - 20));
-      titleBox.setAttribute("height", String(size.height - 16));
+      titleBox.setAttribute("height", String(size.height - 12));
       titleBox.classList.add("mindmap-title-fo");
       const text = document.createElement("div");
       text.className = "mindmap-node-title";
@@ -1352,6 +1367,7 @@ export class MindmapView extends ItemView {
           this.selectedNodeId = node.id;
           this.selectedNodeIds = new Set([node.id]);
           this.containerEl.focus();
+          void this.syncOpenDrawerWithSelection();
           this.renderMindmap();
         }, 220);
       });
@@ -1369,6 +1385,7 @@ export class MindmapView extends ItemView {
         event.stopPropagation();
         this.selectedNodeId = node.id;
         this.selectedNodeIds = new Set([node.id]);
+        void this.syncOpenDrawerWithSelection();
         this.startInlineNodeEdit(node.id);
       });
       group.addEventListener("contextmenu", (event) => {
@@ -1406,11 +1423,12 @@ export class MindmapView extends ItemView {
     const draggingNodes = this.collectMultipleSubtreeNodes(selectedRoots);
     const draggingNodeIds = new Set(draggingNodes.map((current) => current.id));
     const selectedRootIds = new Set(selectedRoots.map((current) => current.id));
-    const startPositions = new Map<string, { x: number; y: number }>();
+    let startPositions = new Map<string, { x: number; y: number }>();
     draggingNodes.forEach((current) => {
       startPositions.set(current.id, { x: current.x, y: current.y });
     });
-    const startAnchor = { x: node.x, y: node.y };
+    let startAnchor = { x: node.x, y: node.y };
+    let siblingSortActive = false;
     const startClient = { x: event.clientX, y: event.clientY };
     const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
     let dragStarted = false;
@@ -1435,6 +1453,7 @@ export class MindmapView extends ItemView {
       const nextY = currentPoint.y - this.dragOffset.y;
       const deltaX = nextX - startAnchor.x;
       const deltaY = nextY - startAnchor.y;
+      siblingSortActive = false;
       draggingNodes.forEach((current) => {
         const origin = startPositions.get(current.id);
         if (!origin) {
@@ -1444,7 +1463,47 @@ export class MindmapView extends ItemView {
         current.y = origin.y + deltaY;
       });
 
-      this.dropTargetNodeId = this.findDropTargetForIds(selectedRootIds)?.id ?? null;
+      if (selectedRoots.length === 1 && this.doc) {
+        const siblingLookup = findParentOfNode(this.doc, selectedRoots[0].id);
+        if (siblingLookup) {
+          const siblings = siblingLookup.parent.children;
+          const currentIndex = siblingLookup.index;
+          const dragCenterY = selectedRoots[0].y;
+          const otherSiblings = siblings.filter((sibling) => sibling.id !== selectedRoots[0].id);
+          let targetIndex = otherSiblings.findIndex((sibling) => dragCenterY < sibling.y);
+          if (targetIndex === -1) {
+            targetIndex = otherSiblings.length;
+          }
+
+          if (targetIndex !== currentIndex) {
+            const reordered = reorderNodeWithinParent(this.doc, selectedRoots[0].id, targetIndex);
+            if (reordered) {
+              const preservedPositions = new Map<string, { x: number; y: number }>();
+              draggingNodes.forEach((current) => {
+                preservedPositions.set(current.id, { x: current.x, y: current.y });
+              });
+              siblingSortActive = true;
+              this.selectedNodeId = selectedRoots[0].id;
+              this.selectedNodeIds = new Set([selectedRoots[0].id]);
+              this.normalizeLayout();
+              draggingNodes.forEach((current) => {
+                const preserved = preservedPositions.get(current.id);
+                if (!preserved) {
+                  return;
+                }
+                current.x = preserved.x;
+                current.y = preserved.y;
+              });
+              startAnchor = { x: selectedRoots[0].x, y: selectedRoots[0].y };
+              draggingNodes.forEach((current) => {
+                startPositions.set(current.id, { x: current.x, y: current.y });
+              });
+            }
+          }
+        }
+      }
+
+      this.dropTargetNodeId = siblingSortActive ? null : this.findDropTargetForIds(selectedRootIds)?.id ?? null;
       this.renderMindmap();
     };
 
@@ -1460,6 +1519,7 @@ export class MindmapView extends ItemView {
           this.selectedNodeId = node.id;
           this.selectedNodeIds = new Set([node.id]);
           this.containerEl.focus();
+          void this.syncOpenDrawerWithSelection();
           this.renderMindmap();
         }
         return;
@@ -1475,12 +1535,14 @@ export class MindmapView extends ItemView {
           this.selectedNodeId = selectedRoots[0]?.id ?? null;
           this.normalizeLayout();
           this.requestSave();
+          void this.syncOpenDrawerWithSelection();
           this.renderMindmap();
           return;
         }
       }
       this.normalizeLayout();
       this.requestSave();
+      void this.syncOpenDrawerWithSelection();
       this.renderMindmap();
     };
 
@@ -1596,6 +1658,34 @@ export class MindmapView extends ItemView {
     return bestTarget;
   }
 
+  private findSiblingReorderIndex(movingNode: MindmapNode): number | null {
+    if (!this.doc) {
+      return null;
+    }
+    const parentLookup = findParentOfNode(this.doc, movingNode.id);
+    if (!parentLookup) {
+      return null;
+    }
+    const siblings = parentLookup.parent.children;
+    if (siblings.length <= 1) {
+      return null;
+    }
+
+    let targetIndex = siblings.length - 1;
+    for (let index = 0; index < siblings.length; index += 1) {
+      const sibling = siblings[index];
+      if (sibling.id === movingNode.id) {
+        continue;
+      }
+      if (movingNode.y < sibling.y) {
+        targetIndex = index;
+        break;
+      }
+    }
+
+    return targetIndex === parentLookup.index ? null : targetIndex;
+  }
+
   private reparentMultipleNodes(nodes: MindmapNode[], nextParentId: string): boolean {
     if (!this.doc || nodes.length === 0) {
       return false;
@@ -1645,6 +1735,46 @@ export class MindmapView extends ItemView {
     return bestTarget;
   }
 
+  private unlockMobileZenIfNeeded(): void {
+    if (this.isMobileLayout && this.isZenMode) {
+      this.setZenMode(false);
+    }
+  }
+
+  private async syncDrawerToNode(nodeId: string): Promise<void> {
+    if (!this.doc) {
+      return;
+    }
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return;
+    }
+    this.selectedNodeId = node.id;
+    this.selectedNodeIds = new Set([node.id]);
+    this.drawerTitleEl.setText(`${node.title}`);
+    const drawerHeaderPathEl = this.drawerHeaderEl.querySelector<HTMLElement>(".mindmap-drawer-header-path");
+    drawerHeaderPathEl?.setText(this.doc?.selfPath ?? this.file?.path ?? "");
+    this.nodeTitleInputEl.value = node.title;
+    this.nodeLinkInputEl.value = node.linkTarget ?? "";
+    this.updateNodeLinkActionButton(node.linkTarget ?? "");
+    this.noteInputEl.value = node.note ?? "";
+    await this.renderMarkdown(node.note ?? "");
+    this.setNoteEditing(false);
+  }
+
+  private async syncOpenDrawerWithSelection(): Promise<void> {
+    if (this.drawerEl.hasClass("is-hidden")) {
+      return;
+    }
+    if (!this.selectedNodeId) {
+      this.closeDrawer();
+      return;
+    }
+    await this.syncDrawerToNode(this.selectedNodeId);
+    this.updateMobileActionButtons();
+    this.renderMindmap();
+  }
+
   private async openDrawer(nodeId: string): Promise<void> {
     if (!this.doc) {
       return;
@@ -1658,15 +1788,7 @@ export class MindmapView extends ItemView {
     this.drawerEl.removeClass("is-hidden");
     this.layoutEl.addClass("has-drawer");
     this.updateMobileActionButtons();
-    this.drawerTitleEl.setText(`${node.title}`);
-    const drawerHeaderPathEl = this.drawerHeaderEl.querySelector<HTMLElement>(".mindmap-drawer-header-path");
-    drawerHeaderPathEl?.setText(this.doc?.selfPath ?? this.file?.path ?? "");
-    this.nodeTitleInputEl.value = node.title;
-    this.nodeLinkInputEl.value = node.linkTarget ?? "";
-    this.updateNodeLinkActionButton(node.linkTarget ?? "");
-    this.noteInputEl.value = node.note ?? "";
-    await this.renderMarkdown(node.note ?? "");
-    this.setNoteEditing(false);
+    await this.syncDrawerToNode(node.id);
     this.renderMindmap();
   }
 
@@ -1706,6 +1828,47 @@ export class MindmapView extends ItemView {
     }
     const prepared = this.prepareMarkdownForPreview(markdown);
     await MarkdownRenderer.renderMarkdown(prepared, this.notePreviewEl, this.file?.path ?? "", this);
+    this.notePreviewEl.querySelectorAll("img").forEach((image) => {
+      if (!(image instanceof HTMLImageElement)) {
+        return;
+      }
+      image.addClass("mindmap-note-preview-image");
+      image.onclick = () => {
+        const overlay = document.body.createDiv({ cls: "mindmap-image-lightbox" });
+        const closeButton = overlay.createEl("button", {
+          cls: "mindmap-image-lightbox-close",
+          text: "关闭"
+        });
+        closeButton.type = "button";
+        const viewport = overlay.createDiv({ cls: "mindmap-image-lightbox-viewport" });
+        const stage = viewport.createDiv({ cls: "mindmap-image-lightbox-stage" });
+        const preview = stage.createEl("img", {
+          cls: "mindmap-image-lightbox-image",
+          attr: { src: image.src, alt: image.alt || "preview" }
+        });
+        const close = (): void => overlay.remove();
+        closeButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          event.preventDefault();
+          close();
+        });
+        closeButton.addEventListener("touchend", (event) => {
+          event.stopPropagation();
+          event.preventDefault();
+          close();
+        }, { passive: false });
+        viewport.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        stage.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        preview.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        overlay.addEventListener("click", close);
+      };
+    });
   }
 
   private scheduleMarkdownRender(markdown: string): void {
@@ -2064,13 +2227,21 @@ export class MindmapView extends ItemView {
 
   private openNodeMenu(event: MouseEvent, nodeId: string): void {
     const node = this.doc ? findNodeById(this.doc, nodeId) : null;
-    const hasLink = !!node?.linkTarget?.trim();
+    const linkTarget = node?.linkTarget?.trim() ?? "";
+    const hasLink = linkTarget.length > 0;
     const menu = new Menu();
     menu.addItem((item) => {
       item.setTitle("查看").setIcon("file-text").onClick(() => {
         void this.openDrawer(nodeId);
       });
     });
+    if (hasLink) {
+      menu.addItem((item) => {
+        item.setTitle("跳转").setIcon("arrow-up-right").onClick(() => {
+          void this.openLinkedTarget(linkTarget);
+        });
+      });
+    }
     // menu.addItem((item) => {
     //   item.setTitle(hasLink ? "添加/替换链接" : "添加链接").setIcon("link").onClick(() => {
     //     void this.openDrawer(nodeId).then(() => {
@@ -2412,6 +2583,7 @@ export class MindmapView extends ItemView {
   private setSingleSelectedNode(nodeId: string | null): void {
     this.selectedNodeId = nodeId;
     this.selectedNodeIds = nodeId ? new Set([nodeId]) : new Set();
+    void this.syncOpenDrawerWithSelection();
   }
 
   private startInlineNodeEdit(nodeId: string): void {
@@ -2489,7 +2661,8 @@ export class MindmapView extends ItemView {
 
     window.setTimeout(() => {
       input.focus();
-      input.select();
+      const caretPosition = input.value.length;
+      input.setSelectionRange(caretPosition, caretPosition);
     }, 0);
   }
 
@@ -2539,7 +2712,7 @@ export class MindmapView extends ItemView {
     if (!ctx) {
       return MindmapView.DEFAULT_NODE_HEIGHT;
     }
-    ctx.font = "600 15px sans-serif";
+    ctx.font = '600 15px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
     const maxLineWidth = Math.max(64, width - 28);
     const paragraphs = content.split("\n");
     let totalLines = 0;
@@ -2559,6 +2732,8 @@ export class MindmapView extends ItemView {
       totalLines += 1;
     });
 
-    return Math.max(MindmapView.DEFAULT_NODE_HEIGHT, totalLines * 22 + 22);
+    const lineHeight = 15 * 1.45;
+    const verticalPadding = 20;
+    return Math.max(MindmapView.DEFAULT_NODE_HEIGHT, Math.ceil(totalLines * lineHeight + verticalPadding));
   }
 }

@@ -38,6 +38,23 @@
    touch-action: none !important;
  }
 
+ .mindmap-root-view.is-mobile .mindmap-drawer,
+ .mindmap-root-view.is-mobile .mindmap-note-surface,
+ .mindmap-root-view.is-mobile .mindmap-note-preview,
+ .mindmap-root-view.is-mobile .mindmap-note-input {
+   overscroll-behavior-x: none;
+ }
+
+ .mindmap-root-view.is-mobile.is-zen-mode .mindmap-drawer,
+ .mindmap-root-view.is-mobile.is-zen-mode .mindmap-note-surface,
+ .mindmap-root-view.is-mobile.is-zen-mode .mindmap-note-preview,
+ .mindmap-root-view.is-mobile.is-zen-mode .mindmap-note-input {
+   touch-action: pan-y !important;
+   overscroll-behavior: contain;
+   overscroll-behavior-x: none;
+   overscroll-behavior-y: contain;
+ }
+
  .mindmap-root-view {
    padding: 0;
    --mindmap-drawer-width: 360px;
@@ -458,6 +475,7 @@
    border-radius: 6px;
    background: #455a64;
    color: #fff;
+   caret-color: #ffe38a;
    text-align: center;
    font-size: 15px;
    font-weight: 600;
@@ -467,6 +485,11 @@
    outline: none;
    appearance: none;
    -webkit-appearance: none;
+ }
+
+ .mindmap-node-inline-input:focus {
+   border-color: #ffe38a;
+   box-shadow: 0 0 0 1px rgba(255, 227, 138, 0.4), 0 0 12px rgba(255, 227, 138, 0.2);
  }
 
  .mindmap-root-view.is-mobile .mindmap-node-title,
@@ -729,7 +752,31 @@
    box-sizing: border-box;
    background: var(--background-primary);
    color: var(--text-normal);
+   caret-color: var(--text-normal);
    overflow: auto;
+   position: relative;
+   z-index: 2;
+   font-family: var(--font-monospace);
+   font-size: 14px;
+   line-height: 1.6;
+   letter-spacing: 0;
+   tab-size: 2;
+   white-space: pre-wrap;
+   overflow-wrap: break-word;
+ }
+
+ .mindmap-note-input:focus {
+   outline: none;
+   border-color: var(--interactive-accent);
+   box-shadow: 0 0 0 1px color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+ }
+
+ .mindmap-note-input::selection {
+   background: color-mix(in srgb, var(--interactive-accent) 28%, transparent);
+ }
+
+ .mindmap-note-input::placeholder {
+   color: var(--text-faint);
  }
 
  .mindmap-note-preview {
@@ -745,6 +792,110 @@
    background: var(--background-primary);
    width: 100%;
    height: 100%;
+ }
+
+ .mindmap-note-preview :not(pre)>code {
+   background: #11141b;
+   color: #f4d27a;
+   border: 1px solid rgba(255, 255, 255, 0.08);
+   border-radius: 6px;
+   padding: 0.12em 0.38em;
+   font-size: 0.84em;
+   font-family: "Iosevka Term", "JetBrains Mono", "Fira Code", monospace;
+ }
+
+ .mindmap-note-preview pre {
+   background: linear-gradient(180deg, #0d1117 0%, #090c12 100%);
+   color: #d7e3f4;
+   border: 1px solid rgba(140, 170, 210, 0.18);
+   border-radius: 12px;
+   padding: 12px 14px;
+   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 24px rgba(0, 0, 0, 0.22);
+ }
+
+ .mindmap-note-preview pre code {
+   background: transparent;
+   color: inherit;
+   border: none;
+   padding: 0;
+   font-size: 12px;
+   line-height: 1.55;
+   font-family: "Iosevka Term", "JetBrains Mono", "Fira Code", monospace;
+ }
+
+ .mindmap-note-preview-image {
+   cursor: zoom-in;
+   border-radius: 10px;
+   transition: transform 120ms ease, box-shadow 120ms ease;
+ }
+
+ .mindmap-note-preview-image:hover {
+   transform: translateY(-1px);
+   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+ }
+
+ .mindmap-image-lightbox {
+   position: fixed;
+   inset: 0;
+   z-index: 2147483646;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   padding: 28px;
+   background: rgba(6, 10, 16, 0.82);
+   backdrop-filter: blur(6px);
+   touch-action: pan-x pan-y pinch-zoom;
+ }
+
+ .mindmap-image-lightbox-close {
+   position: absolute;
+   top: max(16px, env(safe-area-inset-top, 0px) + 8px);
+   right: max(16px, env(safe-area-inset-right, 0px) + 8px);
+   z-index: 2147483647;
+   border: 1px solid rgba(255, 255, 255, 0.12);
+   border-radius: 999px;
+   background: rgba(15, 19, 27, 0.96);
+   color: #eef4ff;
+   padding: 10px 16px;
+   font-size: 13px;
+   font-weight: 700;
+   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+ }
+
+ .mindmap-image-lightbox-viewport {
+   position: relative;
+   z-index: 1;
+   width: 100%;
+   height: 100%;
+   overflow: auto;
+   -webkit-overflow-scrolling: touch;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   touch-action: pan-x pan-y pinch-zoom;
+ }
+
+ .mindmap-image-lightbox-stage {
+   min-width: 100%;
+   min-height: 100%;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   padding: 28px;
+ }
+
+ .mindmap-image-lightbox-image {
+   max-width: none;
+   width: auto;
+   height: auto;
+   min-width: min(92vw, 1400px);
+   min-height: auto;
+   max-height: none;
+   border-radius: 14px;
+   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+   background: #0b0f15;
+   object-fit: contain;
+   transform-origin: center center;
  }
 
  .mindmap-note-preview.is-live-hidden {
