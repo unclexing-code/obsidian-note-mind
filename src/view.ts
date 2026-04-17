@@ -9,9 +9,9 @@ export class MindmapView extends ItemView {
   private static readonly DEFAULT_NODE_HEIGHT = 44;
   private static readonly MIN_NODE_WIDTH = 120;
   private static readonly MIN_NODE_HEIGHT = 44;
-  private static readonly DEFAULT_DRAWER_WIDTH = 360;
-  private static readonly MIN_DRAWER_WIDTH = 280;
-  private static readonly MAX_DRAWER_WIDTH = 720;
+  private static readonly DEFAULT_DRAWER_WIDTH = 380;
+  private static readonly MIN_DRAWER_WIDTH = 300;
+  private static readonly MAX_DRAWER_WIDTH = 860;
   private file: TFile | null = null;
   private doc: MindmapDocument | null = null;
   private layoutEl!: HTMLDivElement;
@@ -20,6 +20,11 @@ export class MindmapView extends ItemView {
   private mobileDeleteButtonEl!: HTMLButtonElement;
   private mobileNoteButtonEl!: HTMLButtonElement;
   private mobileLinkButtonEl!: HTMLButtonElement;
+  private mobileSyncButtonEl!: HTMLButtonElement;
+  private mobileRefreshButtonEl!: HTMLButtonElement;
+  private desktopActionClusterEl!: HTMLDivElement;
+  private desktopSyncButtonEl!: HTMLButtonElement;
+  private desktopRefreshButtonEl!: HTMLButtonElement;
   private mobileCenterButtonEl!: HTMLButtonElement;
   private mobileZenButtonEl!: HTMLButtonElement;
   private mobileActionClusterEl!: HTMLDivElement;
@@ -37,13 +42,16 @@ export class MindmapView extends ItemView {
   private notePreviewEl!: HTMLDivElement;
   private svgEl!: SVGSVGElement;
   private graphLayerEl!: SVGGElement;
+  private marqueeEl!: HTMLDivElement;
   private selectedNodeId: string | null = null;
+  private selectedNodeIds = new Set<string>();
   private editingNodeId: string | null = null;
   private saveTimer: number | null = null;
   private pendingRenderFrame: number | null = null;
   private pendingNodeSelectionTimer: number | null = null;
   private isDragging = false;
   private dropTargetNodeId: string | null = null;
+  private draggingNodeIds = new Set<string>();
   private dragOffset = { x: 0, y: 0 };
   private panOffset = { x: 0, y: 0 };
   private zoomScale = 1;
@@ -55,16 +63,28 @@ export class MindmapView extends ItemView {
   private zenTapCandidate: { nodeId: string | null; isCollapseToggle: boolean; x: number; y: number; time: number } | null = null;
   private lastZenNodeTap: { nodeId: string; time: number } | null = null;
   private audioContext: AudioContext | null = null;
+  private isReloadingFromDisk = false;
   private blockEdgeSidebarGesture = false;
   private isZenMode = false;
   private navigationStack: string[] = [];
   private shouldCenterOnNextRender = false;
   private shouldFocusRootOnNextRender = false;
   private readonly textMeasureCanvas = document.createElement("canvas");
+  private marqueeSelection: { startX: number; startY: number; currentX: number; currentY: number } | null = null;
+  private mobileCanvasLongPressTimer: number | null = null;
+  private pendingCanvasPanStart: { x: number; y: number; panX: number; panY: number } | null = null;
+  private mobileLongPressMarqueeActive = false;
   private readonly onKeydown = (event: KeyboardEvent): void => {
     if (event.key === "Escape" && !this.drawerEl.hasClass("is-hidden")) {
       event.preventDefault();
       this.closeDrawer();
+      return;
+    }
+    if (event.key === "Escape" && this.selectedNodeIds.size > 0) {
+      event.preventDefault();
+      this.setSingleSelectedNode(null);
+      this.editingNodeId = null;
+      this.renderMindmap();
       return;
     }
     if (this.shouldIgnoreMindmapShortcuts(event)) {
@@ -109,6 +129,42 @@ export class MindmapView extends ItemView {
     this.app.workspace.revealLeaf(this.leaf);
     void this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
     this.containerEl.focus();
+  }
+
+  private clearMobileCanvasLongPressTimer(): void {
+    if (this.mobileCanvasLongPressTimer !== null) {
+      window.clearTimeout(this.mobileCanvasLongPressTimer);
+      this.mobileCanvasLongPressTimer = null;
+    }
+  }
+
+  private beginSelectionMarquee(startX: number, startY: number): void {
+    this.marqueeSelection = {
+      startX,
+      startY,
+      currentX: startX,
+      currentY: startY
+    };
+    this.mobileLongPressMarqueeActive = true;
+    this.pendingCanvasPanStart = null;
+    this.selectedNodeId = null;
+    this.selectedNodeIds.clear();
+    this.editingNodeId = null;
+    this.renderMindmap();
+    navigator.vibrate?.(10);
+  }
+
+  private finishSelectionMarquee(): void {
+    if (!this.doc || !this.marqueeSelection) {
+      this.mobileLongPressMarqueeActive = false;
+      return;
+    }
+    const selectedIds = this.getNodesInMarquee(this.marqueeSelection);
+    this.selectedNodeIds = selectedIds;
+    this.selectedNodeId = Array.from(selectedIds)[0] ?? null;
+    this.marqueeSelection = null;
+    this.mobileLongPressMarqueeActive = false;
+    this.renderMindmap();
   }
 
   private readonly onContainerZenTouchStart = (event: TouchEvent): void => {
@@ -439,8 +495,10 @@ export class MindmapView extends ItemView {
     const first = event.touches.item(0);
     const second = event.touches.item(1);
     if (first && second) {
+      this.clearMobileCanvasLongPressTimer();
       event.preventDefault();
       this.touchPanStart = null;
+      this.pendingCanvasPanStart = null;
       this.blockEdgeSidebarGesture = false;
       this.pinchStartDistance = this.getTouchDistance(first, second);
       this.pinchStartScale = this.zoomScale;
@@ -448,6 +506,7 @@ export class MindmapView extends ItemView {
     }
 
     if (!first || !this.isMobileLayout) {
+      this.clearMobileCanvasLongPressTimer();
       this.pinchStartDistance = null;
       this.blockEdgeSidebarGesture = false;
       return;
@@ -459,11 +518,15 @@ export class MindmapView extends ItemView {
     if (target instanceof Element) {
       const isInteractiveControl = !!target.closest(".mindmap-collapse-group, .mindmap-jump-group, .mindmap-mobile-action-cluster, .mindmap-drawer");
       if (isInteractiveControl) {
+        this.clearMobileCanvasLongPressTimer();
         this.touchPanStart = null;
+        this.pendingCanvasPanStart = null;
         return;
       }
       if (target.closest(".mindmap-node-group, .mindmap-resize-handle")) {
+        this.clearMobileCanvasLongPressTimer();
         this.touchPanStart = null;
+        this.pendingCanvasPanStart = null;
         this.pinchStartDistance = null;
         if (!this.isZenMode) {
           event.preventDefault();
@@ -474,12 +537,18 @@ export class MindmapView extends ItemView {
 
     event.preventDefault();
     this.pinchStartDistance = null;
-    this.touchPanStart = {
+    this.pendingCanvasPanStart = {
       x: first.clientX,
       y: first.clientY,
       panX: this.panOffset.x,
       panY: this.panOffset.y
     };
+    const startPoint = this.getDocumentPoint(first.clientX, first.clientY);
+    this.clearMobileCanvasLongPressTimer();
+    this.mobileCanvasLongPressTimer = window.setTimeout(() => {
+      this.mobileCanvasLongPressTimer = null;
+      this.beginSelectionMarquee(startPoint.x, startPoint.y);
+    }, 360);
   };
 
   private readonly onTouchMove = (event: TouchEvent): void => {
@@ -489,6 +558,7 @@ export class MindmapView extends ItemView {
     const first = event.touches.item(0);
     const second = event.touches.item(1);
     if (first && second && this.pinchStartDistance !== null) {
+      this.clearMobileCanvasLongPressTimer();
       event.preventDefault();
       const nextDistance = this.getTouchDistance(first, second);
       if (nextDistance <= 0) {
@@ -505,7 +575,33 @@ export class MindmapView extends ItemView {
       event.preventDefault();
     }
 
-    if (!first || !this.touchPanStart) {
+    if (this.mobileLongPressMarqueeActive && first && this.marqueeSelection) {
+      event.preventDefault();
+      const point = this.getDocumentPoint(first.clientX, first.clientY);
+      this.marqueeSelection = {
+        startX: this.marqueeSelection.startX,
+        startY: this.marqueeSelection.startY,
+        currentX: point.x,
+        currentY: point.y
+      };
+      this.renderMindmap();
+      return;
+    }
+
+    if (!first) {
+      return;
+    }
+
+    if (this.pendingCanvasPanStart) {
+      const distance = Math.hypot(first.clientX - this.pendingCanvasPanStart.x, first.clientY - this.pendingCanvasPanStart.y);
+      if (distance > 10) {
+        this.clearMobileCanvasLongPressTimer();
+        this.touchPanStart = this.pendingCanvasPanStart;
+        this.pendingCanvasPanStart = null;
+      }
+    }
+
+    if (!this.touchPanStart) {
       return;
     }
 
@@ -519,9 +615,97 @@ export class MindmapView extends ItemView {
     if (this.isZenMode && this.isMobileLayout) {
       return;
     }
+    this.clearMobileCanvasLongPressTimer();
+    if (this.mobileLongPressMarqueeActive) {
+      this.finishSelectionMarquee();
+    }
     this.pinchStartDistance = null;
     this.touchPanStart = null;
+    this.pendingCanvasPanStart = null;
     this.blockEdgeSidebarGesture = this.isZenMode;
+  };
+
+  private readonly onCanvasPointerDown = (event: PointerEvent): void => {
+    if (this.isMobileLayout) {
+      return;
+    }
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    if (target.closest(".mindmap-node-group, .mindmap-collapse-group, .mindmap-jump-group, .mindmap-drawer, .mindmap-mobile-action-cluster, .mindmap-desktop-action-cluster")) {
+      return;
+    }
+    if (this.pendingNodeSelectionTimer) {
+      window.clearTimeout(this.pendingNodeSelectionTimer);
+      this.pendingNodeSelectionTimer = null;
+    }
+
+    const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
+    const startClient = { x: event.clientX, y: event.clientY };
+    let marqueeStarted = false;
+
+    const clearSelection = (): void => {
+      if (this.selectedNodeId !== null || this.editingNodeId !== null || this.selectedNodeIds.size > 0) {
+        this.selectedNodeId = null;
+        this.selectedNodeIds.clear();
+        this.editingNodeId = null;
+        this.renderMindmap();
+      }
+    };
+
+    const finishMarquee = (): void => {
+      if (!this.doc || !this.marqueeSelection) {
+        return;
+      }
+      const selectedIds = this.getNodesInMarquee(this.marqueeSelection);
+      this.selectedNodeIds = selectedIds;
+      this.selectedNodeId = selectedIds.size === 1 ? Array.from(selectedIds)[0] ?? null : null;
+      this.editingNodeId = null;
+      this.renderMindmap();
+    };
+
+    const onMove = (moveEvent: PointerEvent): void => {
+      const distance = Math.hypot(moveEvent.clientX - startClient.x, moveEvent.clientY - startClient.y);
+      if (!marqueeStarted) {
+        if (distance < 6) {
+          return;
+        }
+        marqueeStarted = true;
+        clearSelection();
+        this.marqueeSelection = {
+          startX: startPoint.x,
+          startY: startPoint.y,
+          currentX: this.getDocumentPoint(moveEvent.clientX, moveEvent.clientY).x,
+          currentY: this.getDocumentPoint(moveEvent.clientX, moveEvent.clientY).y
+        };
+      }
+      moveEvent.preventDefault();
+      moveEvent.stopPropagation();
+      const point = this.getDocumentPoint(moveEvent.clientX, moveEvent.clientY);
+      this.marqueeSelection = {
+        startX: startPoint.x,
+        startY: startPoint.y,
+        currentX: point.x,
+        currentY: point.y
+      };
+      this.renderMindmap();
+    };
+
+    const onUp = (): void => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      if (!marqueeStarted) {
+        clearSelection();
+        return;
+      }
+      finishMarquee();
+      this.marqueeSelection = null;
+      this.renderMindmap();
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   };
 
   private readonly onCanvasDoubleClick = (event: MouseEvent): void => {
@@ -577,6 +761,18 @@ export class MindmapView extends ItemView {
     this.layoutEl = this.containerEl.createDiv({ cls: "mindmap-layout" });
     this.updateDrawerWidth();
     this.canvasEl = this.layoutEl.createDiv({ cls: "mindmap-canvas" });
+    this.marqueeEl = this.canvasEl.createDiv({ cls: "mindmap-selection-marquee is-hidden" });
+    this.desktopActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-desktop-action-cluster" });
+    this.desktopSyncButtonEl = this.desktopActionClusterEl.createEl("button", { cls: "mindmap-desktop-sync-button", text: "同步" });
+    this.desktopSyncButtonEl.type = "button";
+    this.desktopSyncButtonEl.addEventListener("click", () => {
+      void this.syncNow();
+    });
+    this.desktopRefreshButtonEl = this.desktopActionClusterEl.createEl("button", { cls: "mindmap-desktop-refresh-button", text: "刷新" });
+    this.desktopRefreshButtonEl.type = "button";
+    this.desktopRefreshButtonEl.addEventListener("click", () => {
+      void this.reloadFromDisk(true);
+    });
     this.mobileActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-mobile-action-cluster" });
     const mobileActionClusterEl = this.mobileActionClusterEl;
     // 增加“新增节点”按钮
@@ -608,6 +804,16 @@ export class MindmapView extends ItemView {
         return;
       }
       void this.openLinkedTarget(node.linkTarget);
+    });
+    this.mobileSyncButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sync-button", text: "同步" });
+    this.mobileSyncButtonEl.type = "button";
+    this.mobileSyncButtonEl.addEventListener("click", () => {
+      void this.syncNow();
+    });
+    this.mobileRefreshButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-refresh-button", text: "刷新" });
+    this.mobileRefreshButtonEl.type = "button";
+    this.mobileRefreshButtonEl.addEventListener("click", () => {
+      void this.reloadFromDisk(true);
     });
     this.mobileNoteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-note-button", text: "📋" });
     this.mobileNoteButtonEl.type = "button";
@@ -680,7 +886,7 @@ export class MindmapView extends ItemView {
       }
       const nextTitle = this.nodeTitleInputEl.value.trim();
       node.title = nextTitle.length > 0 ? nextTitle : "未命名节点";
-      this.drawerTitleEl.setText(`${node.title} 的笔记`);
+      this.drawerTitleEl.setText(`${node.title}`);
       this.normalizeLayout();
       this.requestSave();
       this.renderMindmap();
@@ -753,6 +959,7 @@ export class MindmapView extends ItemView {
     this.svgEl.classList.add("mindmap-svg");
     this.graphLayerEl = document.createElementNS("http://www.w3.org/2000/svg", "g");
     this.svgEl.appendChild(this.graphLayerEl);
+    this.canvasEl.addEventListener("pointerdown", this.onCanvasPointerDown);
     this.canvasEl.addEventListener("wheel", this.onWheelPan, { passive: false });
     this.canvasEl.addEventListener("dblclick", this.onCanvasDoubleClick);
     this.canvasEl.addEventListener("touchstart", this.onTouchStart, { passive: false });
@@ -760,6 +967,13 @@ export class MindmapView extends ItemView {
     this.canvasEl.addEventListener("touchend", this.onTouchEnd, { passive: false });
     this.canvasEl.addEventListener("touchcancel", this.onTouchEnd, { passive: false });
     this.canvasEl.appendChild(this.svgEl);
+
+    this.registerEvent(this.app.vault.on("modify", (file) => {
+      if (!this.file || file.path !== this.file.path || this.isReloadingFromDisk) {
+        return;
+      }
+      void this.reloadFromDisk(false);
+    }));
 
     await this.loadFromFile();
     this.renderMindmap();
@@ -785,6 +999,7 @@ export class MindmapView extends ItemView {
       document.removeEventListener("touchend", this.onWindowTouchEnd, true);
       document.removeEventListener("touchcancel", this.onWindowTouchEnd, true);
     }
+    this.canvasEl.removeEventListener("pointerdown", this.onCanvasPointerDown);
     this.canvasEl.removeEventListener("wheel", this.onWheelPan);
     this.canvasEl.removeEventListener("dblclick", this.onCanvasDoubleClick);
     this.canvasEl.removeEventListener("touchstart", this.onTouchStart);
@@ -898,12 +1113,27 @@ export class MindmapView extends ItemView {
       `translate(${this.panOffset.x}, ${this.panOffset.y}) scale(${this.zoomScale})`
     );
 
-    const draggingRoot = this.isDragging && this.selectedNodeId && this.doc
-      ? findNodeById(this.doc, this.selectedNodeId)
-      : null;
-    const draggingIds = draggingRoot
-      ? new Set(this.collectSubtreeNodes(draggingRoot).map((current) => current.id))
-      : null;
+    const draggingIds = this.draggingNodeIds.size > 0
+      ? new Set(this.draggingNodeIds)
+      : (() => {
+        const draggingRoot = this.isDragging && this.selectedNodeId && this.doc
+          ? findNodeById(this.doc, this.selectedNodeId)
+          : null;
+        return draggingRoot
+          ? new Set(this.collectSubtreeNodes(draggingRoot).map((current) => current.id))
+          : null;
+      })();
+
+    if (this.marqueeSelection) {
+      const rect = this.getMarqueeClientRect(this.marqueeSelection);
+      this.marqueeEl.removeClass("is-hidden");
+      this.marqueeEl.style.left = `${rect.left}px`;
+      this.marqueeEl.style.top = `${rect.top}px`;
+      this.marqueeEl.style.width = `${rect.width}px`;
+      this.marqueeEl.style.height = `${rect.height}px`;
+    } else {
+      this.marqueeEl.addClass("is-hidden");
+    }
 
     const drawOrthogonalConnectors = (node: MindmapNode): void => {
       if (node.collapsed || node.children.length === 0) {
@@ -1008,7 +1238,7 @@ export class MindmapView extends ItemView {
       if (this.dropTargetNodeId === node.id) {
         rect.classList.add("is-drop-target");
       }
-      if (this.selectedNodeId === node.id) {
+      if (this.selectedNodeId === node.id || this.selectedNodeIds.has(node.id)) {
         rect.classList.add("is-selected");
       }
       group.appendChild(rect);
@@ -1098,7 +1328,9 @@ export class MindmapView extends ItemView {
       // });
       // group.appendChild(resizeHandle);
 
-      group.addEventListener("pointerdown", (event) => this.startDrag(event, node));
+      group.addEventListener("pointerdown", (event) => {
+        this.startDrag(event, node);
+      });
       group.addEventListener("click", (event) => {
         if (event.target instanceof Element && event.target.closest(".mindmap-collapse-group, .mindmap-jump-group")) {
           return;
@@ -1111,12 +1343,14 @@ export class MindmapView extends ItemView {
           event.preventDefault();
           event.stopPropagation();
           this.selectedNodeId = node.id;
+          this.selectedNodeIds = new Set([node.id]);
           this.startInlineNodeEdit(node.id);
           return;
         }
         this.pendingNodeSelectionTimer = window.setTimeout(() => {
           this.pendingNodeSelectionTimer = null;
           this.selectedNodeId = node.id;
+          this.selectedNodeIds = new Set([node.id]);
           this.containerEl.focus();
           this.renderMindmap();
         }, 220);
@@ -1134,6 +1368,7 @@ export class MindmapView extends ItemView {
         event.preventDefault();
         event.stopPropagation();
         this.selectedNodeId = node.id;
+        this.selectedNodeIds = new Set([node.id]);
         this.startInlineNodeEdit(node.id);
       });
       group.addEventListener("contextmenu", (event) => {
@@ -1144,6 +1379,7 @@ export class MindmapView extends ItemView {
         event.preventDefault();
         event.stopPropagation();
         this.selectedNodeId = node.id;
+        this.selectedNodeIds = new Set([node.id]);
         this.renderMindmap();
         this.openNodeMenu(event, node.id);
       });
@@ -1165,12 +1401,16 @@ export class MindmapView extends ItemView {
     if (event.button !== 0) {
       return;
     }
-    const draggingNodes = this.collectSubtreeNodes(node);
+
+    const selectedRoots = this.getDragRootNodes(node);
+    const draggingNodes = this.collectMultipleSubtreeNodes(selectedRoots);
+    const draggingNodeIds = new Set(draggingNodes.map((current) => current.id));
+    const selectedRootIds = new Set(selectedRoots.map((current) => current.id));
     const startPositions = new Map<string, { x: number; y: number }>();
     draggingNodes.forEach((current) => {
       startPositions.set(current.id, { x: current.x, y: current.y });
     });
-    let startNodePos = { x: node.x, y: node.y };
+    const startAnchor = { x: node.x, y: node.y };
     const startClient = { x: event.clientX, y: event.clientY };
     const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
     let dragStarted = false;
@@ -1183,7 +1423,9 @@ export class MindmapView extends ItemView {
         }
         dragStarted = true;
         this.isDragging = true;
-        this.selectedNodeId = node.id;
+        this.draggingNodeIds = draggingNodeIds;
+        this.selectedNodeId = selectedRootIds.has(node.id) ? node.id : selectedRoots[0]?.id ?? node.id;
+        this.selectedNodeIds = new Set(selectedRootIds);
         this.dragOffset = { x: startPoint.x - node.x, y: startPoint.y - node.y };
       }
       moveEvent.stopPropagation();
@@ -1191,58 +1433,18 @@ export class MindmapView extends ItemView {
       const currentPoint = this.getDocumentPoint(moveEvent.clientX, moveEvent.clientY);
       const nextX = currentPoint.x - this.dragOffset.x;
       const nextY = currentPoint.y - this.dragOffset.y;
-      const deltaX = nextX - startNodePos.x;
-      const deltaY = nextY - startNodePos.y;
-      const draggingNodes = this.collectSubtreeNodes(node);
-      const draggingNodeIds = new Set(draggingNodes.map((current) => current.id));
+      const deltaX = nextX - startAnchor.x;
+      const deltaY = nextY - startAnchor.y;
       draggingNodes.forEach((current) => {
         const origin = startPositions.get(current.id);
         if (!origin) {
-          return;
-        }
-        if (!draggingNodeIds.has(current.id)) {
           return;
         }
         current.x = origin.x + deltaX;
         current.y = origin.y + deltaY;
       });
 
-      const siblingLookup = this.doc ? findParentOfNode(this.doc, node.id) : null;
-      if (siblingLookup) {
-        const siblings = siblingLookup.parent.children;
-        const currentIndex = siblingLookup.index;
-        const dragCenterY = node.y;
-        const otherSiblings = siblings.filter((sibling) => sibling.id !== node.id);
-        let targetIndex = otherSiblings.findIndex((sibling) => dragCenterY < sibling.y);
-        if (targetIndex === -1) {
-          targetIndex = otherSiblings.length;
-        }
-
-        if (targetIndex !== currentIndex) {
-          const reordered = reorderNodeWithinParent(this.doc!, node.id, targetIndex);
-          if (reordered) {
-            const preservedPositions = new Map<string, { x: number; y: number }>();
-            draggingNodes.forEach((current) => {
-              preservedPositions.set(current.id, { x: current.x, y: current.y });
-            });
-            this.normalizeLayout();
-            draggingNodes.forEach((current) => {
-              const preserved = preservedPositions.get(current.id);
-              if (!preserved) {
-                return;
-              }
-              current.x = preserved.x;
-              current.y = preserved.y;
-            });
-            startNodePos = { x: node.x, y: node.y };
-            draggingNodes.forEach((current) => {
-              startPositions.set(current.id, { x: current.x, y: current.y });
-            });
-          }
-        }
-      }
-
-      this.dropTargetNodeId = this.findDropTarget(node)?.id ?? null;
+      this.dropTargetNodeId = this.findDropTargetForIds(selectedRootIds)?.id ?? null;
       this.renderMindmap();
     };
 
@@ -1256,18 +1458,21 @@ export class MindmapView extends ItemView {
           !(upEvent.target instanceof Element && upEvent.target.closest(".mindmap-collapse-group, .mindmap-jump-group"))
         ) {
           this.selectedNodeId = node.id;
+          this.selectedNodeIds = new Set([node.id]);
           this.containerEl.focus();
           this.renderMindmap();
         }
         return;
       }
       this.isDragging = false;
-      const dropTarget = this.findDropTarget(node);
+      this.draggingNodeIds = new Set();
+      const dropTarget = this.findDropTargetForIds(selectedRootIds);
       this.dropTargetNodeId = null;
       if (dropTarget && this.doc) {
-        const moved = reparentNode(this.doc, node.id, dropTarget.id);
+        const moved = this.reparentMultipleNodes(selectedRoots, dropTarget.id);
         if (moved) {
-          this.selectedNodeId = node.id;
+          this.selectedNodeIds = new Set(selectedRoots.map((current) => current.id));
+          this.selectedNodeId = selectedRoots[0]?.id ?? null;
           this.normalizeLayout();
           this.requestSave();
           this.renderMindmap();
@@ -1291,6 +1496,123 @@ export class MindmapView extends ItemView {
     };
     walk(node);
     return nodes;
+  }
+
+  private collectMultipleSubtreeNodes(nodes: MindmapNode[]): MindmapNode[] {
+    const collected = new Map<string, MindmapNode>();
+    nodes.forEach((node) => {
+      this.collectSubtreeNodes(node).forEach((current) => {
+        collected.set(current.id, current);
+      });
+    });
+    return Array.from(collected.values());
+  }
+
+  private getDragRootNodes(fallbackNode: MindmapNode): MindmapNode[] {
+    if (!this.doc || this.selectedNodeIds.size === 0 || !this.selectedNodeIds.has(fallbackNode.id)) {
+      return [fallbackNode];
+    }
+    const selectedNodes = Array.from(this.selectedNodeIds)
+      .map((id) => findNodeById(this.doc!, id))
+      .filter((node): node is MindmapNode => !!node);
+    return selectedNodes.filter((node) => {
+      const parentLookup = findParentOfNode(this.doc!, node.id);
+      return !parentLookup || !this.selectedNodeIds.has(parentLookup.parent.id);
+    });
+  }
+
+  private getNodesInMarquee(marquee: { startX: number; startY: number; currentX: number; currentY: number }): Set<string> {
+    if (!this.doc) {
+      return new Set();
+    }
+    const left = Math.min(marquee.startX, marquee.currentX);
+    const right = Math.max(marquee.startX, marquee.currentX);
+    const top = Math.min(marquee.startY, marquee.currentY);
+    const bottom = Math.max(marquee.startY, marquee.currentY);
+    const selectedIds = new Set<string>();
+    visibleNodes(this.doc.root).forEach((node) => {
+      const size = this.ensureNodeSize(node);
+      const nodeLeft = node.x - size.width / 2;
+      const nodeRight = node.x + size.width / 2;
+      const nodeTop = node.y - size.height / 2;
+      const nodeBottom = node.y + size.height / 2;
+      const intersects = nodeLeft <= right && nodeRight >= left && nodeTop <= bottom && nodeBottom >= top;
+      if (intersects) {
+        selectedIds.add(node.id);
+      }
+    });
+    return selectedIds;
+  }
+
+  private getMarqueeClientRect(marquee: { startX: number; startY: number; currentX: number; currentY: number }): { left: number; top: number; width: number; height: number } {
+    const start = this.getCanvasClientPoint(marquee.startX, marquee.startY);
+    const current = this.getCanvasClientPoint(marquee.currentX, marquee.currentY);
+    return {
+      left: Math.min(start.x, current.x),
+      top: Math.min(start.y, current.y),
+      width: Math.abs(current.x - start.x),
+      height: Math.abs(current.y - start.y)
+    };
+  }
+
+  private findDropTargetForIds(movingRootIds: Set<string>): MindmapNode | null {
+    if (!this.doc) {
+      return null;
+    }
+    const subtreeIds = new Set<string>();
+    movingRootIds.forEach((id) => {
+      const node = findNodeById(this.doc!, id);
+      if (!node) {
+        return;
+      }
+      this.collectSubtreeNodes(node).forEach((current) => subtreeIds.add(current.id));
+    });
+    const anchorNodeId = this.selectedNodeId && movingRootIds.has(this.selectedNodeId)
+      ? this.selectedNodeId
+      : Array.from(movingRootIds)[0] ?? null;
+    const anchorNode = anchorNodeId ? findNodeById(this.doc, anchorNodeId) : null;
+    if (!anchorNode) {
+      return null;
+    }
+    const candidates = visibleNodes(this.doc.root).filter((node) => !subtreeIds.has(node.id));
+    let bestTarget: MindmapNode | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    candidates.forEach((candidate) => {
+      const size = this.ensureNodeSize(candidate);
+      const anchorX = candidate.x + size.width / 2;
+      const anchorY = candidate.y;
+      const deltaX = anchorNode.x - anchorX;
+      const deltaY = anchorNode.y - anchorY;
+      const distance = Math.hypot(deltaX, deltaY);
+      const edgeThreshold = Math.max(42, size.height * 0.9);
+      if (distance > edgeThreshold || distance >= bestDistance) {
+        return;
+      }
+      bestTarget = candidate;
+      bestDistance = distance;
+    });
+
+    return bestTarget;
+  }
+
+  private reparentMultipleNodes(nodes: MindmapNode[], nextParentId: string): boolean {
+    if (!this.doc || nodes.length === 0) {
+      return false;
+    }
+    const movableNodes = [...nodes].filter((node) => node.id !== this.doc!.root.id);
+    const nextParent = findNodeById(this.doc, nextParentId);
+    if (!nextParent) {
+      return false;
+    }
+    const movedNodes: MindmapNode[] = [];
+    movableNodes.forEach((node) => {
+      const moved = reparentNode(this.doc!, node.id, nextParentId);
+      if (moved) {
+        movedNodes.push(moved.moved);
+      }
+    });
+    return movedNodes.length > 0;
   }
 
   private findDropTarget(movingNode: MindmapNode): MindmapNode | null {
@@ -1332,10 +1654,11 @@ export class MindmapView extends ItemView {
       return;
     }
     this.selectedNodeId = node.id;
+    this.selectedNodeIds = new Set([node.id]);
     this.drawerEl.removeClass("is-hidden");
     this.layoutEl.addClass("has-drawer");
     this.updateMobileActionButtons();
-    this.drawerTitleEl.setText(`${node.title} 的笔记`);
+    this.drawerTitleEl.setText(`${node.title}`);
     const drawerHeaderPathEl = this.drawerHeaderEl.querySelector<HTMLElement>(".mindmap-drawer-header-path");
     drawerHeaderPathEl?.setText(this.doc?.selfPath ?? this.file?.path ?? "");
     this.nodeTitleInputEl.value = node.title;
@@ -1424,6 +1747,10 @@ export class MindmapView extends ItemView {
     const startX = event.clientX;
     const startWidth = this.drawerWidth;
 
+    this.drawerResizeHandleEl?.addClass("is-dragging");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
     const onMove = (moveEvent: PointerEvent): void => {
       const delta = startX - moveEvent.clientX;
       this.drawerWidth = Math.min(
@@ -1434,6 +1761,9 @@ export class MindmapView extends ItemView {
     };
 
     const onUp = (): void => {
+      this.drawerResizeHandleEl?.removeClass("is-dragging");
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
@@ -1517,12 +1847,56 @@ export class MindmapView extends ItemView {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    await this.app.vault.modify(this.file, JSON.stringify(this.doc, null, 2));
+    this.isReloadingFromDisk = true;
+    try {
+      await this.app.vault.modify(this.file, JSON.stringify(this.doc, null, 2));
+    } finally {
+      window.setTimeout(() => {
+        this.isReloadingFromDisk = false;
+      }, 120);
+    }
+  }
+
+  private async syncNow(): Promise<void> {
+    await this.flushSave();
+    new Notice("已立即写入文件，等待 iCloud 同步");
+  }
+
+  private async reloadFromDisk(showNotice: boolean): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+    this.isReloadingFromDisk = true;
+    try {
+      await this.loadFromFile();
+      if (!this.doc) {
+        return;
+      }
+      if (this.selectedNodeId && !findNodeById(this.doc, this.selectedNodeId)) {
+        this.selectedNodeId = this.doc.root.id;
+      }
+      if (this.editingNodeId && !findNodeById(this.doc, this.editingNodeId)) {
+        this.editingNodeId = null;
+      }
+      this.renderMindmap();
+      if (showNotice) {
+        new Notice("已从磁盘重新加载导图");
+      }
+    } finally {
+      window.setTimeout(() => {
+        this.isReloadingFromDisk = false;
+      }, 120);
+    }
   }
 
   private async openLinkedTarget(rawPath: string): Promise<void> {
     const input = rawPath.trim();
     if (!input) {
+      return;
+    }
+
+    if (/^https?:\/\//i.test(input)) {
+      window.open(input, "_blank", "noopener,noreferrer");
       return;
     }
 
@@ -1779,6 +2153,13 @@ export class MindmapView extends ItemView {
     };
   }
 
+  private getCanvasClientPoint(docX: number, docY: number): { x: number; y: number } {
+    return {
+      x: docX * this.zoomScale + this.panOffset.x,
+      y: docY * this.zoomScale + this.panOffset.y
+    };
+  }
+
   private zoomAt(clientX: number, clientY: number, zoomDelta: number): void {
     const rect = this.svgEl.getBoundingClientRect();
     const beforeX = (clientX - rect.left - this.panOffset.x) / this.zoomScale;
@@ -2028,12 +2409,18 @@ export class MindmapView extends ItemView {
     this.setNoteEditing(false);
   }
 
+  private setSingleSelectedNode(nodeId: string | null): void {
+    this.selectedNodeId = nodeId;
+    this.selectedNodeIds = nodeId ? new Set([nodeId]) : new Set();
+  }
+
   private startInlineNodeEdit(nodeId: string): void {
     if (this.pendingNodeSelectionTimer) {
       window.clearTimeout(this.pendingNodeSelectionTimer);
       this.pendingNodeSelectionTimer = null;
     }
     this.selectedNodeId = nodeId;
+    this.selectedNodeIds = new Set([nodeId]);
     this.editingNodeId = nodeId;
     this.renderMindmap();
   }
@@ -2044,11 +2431,15 @@ export class MindmapView extends ItemView {
     width: number,
     height: number
   ): void {
+    const isMobileInlineEdit = this.isMobileLayout;
+    const horizontalInset = isMobileInlineEdit ? 6 : 8;
+    const verticalInset = isMobileInlineEdit ? 5 : 7;
+    const editorHeight = isMobileInlineEdit ? height - 10 : height - 14;
     const foreignObject = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
-    foreignObject.setAttribute("x", String(-width / 2 + 8));
-    foreignObject.setAttribute("y", String(-height / 2 + 7));
-    foreignObject.setAttribute("width", String(width - 16));
-    foreignObject.setAttribute("height", String(height - 14));
+    foreignObject.setAttribute("x", String(-width / 2 + horizontalInset));
+    foreignObject.setAttribute("y", String(-height / 2 + verticalInset));
+    foreignObject.setAttribute("width", String(width - horizontalInset * 2));
+    foreignObject.setAttribute("height", String(editorHeight));
 
     const input = document.createElement("input");
     input.className = "mindmap-node-inline-input";

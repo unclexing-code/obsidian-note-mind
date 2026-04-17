@@ -56,12 +56,58 @@
    touch-action: none;
  }
 
- .mindmap-mobile-action-cluster,
+ .mindmap-desktop-action-cluster,
+ .mindmap-desktop-sync-button,
+ .mindmap-desktop-refresh-button {
+   display: none;
+ }
+
+ .mindmap-root-view:not(.is-mobile) .mindmap-desktop-action-cluster {
+   display: flex;
+   position: absolute;
+   left: 14px;
+   bottom: 14px;
+   gap: 8px;
+   padding: 8px;
+   z-index: 25;
+   pointer-events: auto;
+ }
+
+ .mindmap-root-view:not(.is-mobile) .mindmap-desktop-sync-button,
+ .mindmap-root-view:not(.is-mobile) .mindmap-desktop-refresh-button {
+   display: inline-flex;
+   align-items: center;
+   justify-content: center;
+   min-height: 34px;
+   padding: 0 12px;
+   border: 1px solid var(--mindmap-mobile-control-border);
+   border-radius: 999px;
+   background: var(--mindmap-mobile-control-bg);
+   color: var(--mindmap-mobile-control-text);
+   box-shadow: var(--mindmap-mobile-control-shadow);
+   cursor: pointer;
+ }
+
+ .mindmap-root-view:not(.is-mobile) .mindmap-desktop-sync-button {
+   color: #d9ffd6;
+ }
+
+ .mindmap-root-view:not(.is-mobile) .mindmap-desktop-refresh-button {
+   color: #ffe9b8;
+ }
+
+ .mindmap-root-view:not(.is-mobile) .mindmap-desktop-sync-button:active,
+ .mindmap-root-view:not(.is-mobile) .mindmap-desktop-refresh-button:active {
+   transform: scale(0.98);
+ }
+
  .mindmap-mobile-add-button,
  .mindmap-mobile-delete-button,
  .mindmap-mobile-note-button,
  .mindmap-mobile-folder-button,
  .mindmap-mobile-center-button,
+ .mindmap-mobile-sync-button,
+ .mindmap-mobile-refresh-button,
  .mindmap-mobile-zen-button,
  .mindmap-mobile-link-button {
    display: none;
@@ -87,6 +133,8 @@
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sync-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-refresh-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-zen-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-link-button {
    display: inline-flex;
@@ -121,6 +169,8 @@
  .mindmap-mobile-delete-button,
  .mindmap-mobile-note-button,
  .mindmap-mobile-center-button,
+ .mindmap-mobile-sync-button,
+ .mindmap-mobile-refresh-button,
  .mindmap-mobile-zen-button,
  .mindmap-mobile-link-button {
    font-size: 11px;
@@ -138,6 +188,14 @@
 
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button {
    color: #d6efff;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-sync-button {
+   color: #d9ffd6;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-refresh-button {
+   color: #ffe9b8;
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-zen-button {
@@ -165,6 +223,8 @@
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button:active,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sync-button:active,
+ .mindmap-root-view.is-mobile .mindmap-mobile-refresh-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-zen-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-link-button:active {
    transform: scale(0.96);
@@ -174,6 +234,8 @@
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button::before,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sync-button::before,
+ .mindmap-root-view.is-mobile .mindmap-mobile-refresh-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-zen-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-link-button::before {
    content: "";
@@ -188,6 +250,8 @@
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sync-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-refresh-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-zen-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-link-button {
    position: relative;
@@ -206,7 +270,7 @@
  }
 
  .mindmap-layout.has-drawer {
-   grid-template-columns: minmax(0, 1fr) 8px var(--mindmap-drawer-width);
+   grid-template-columns: minmax(0, 1fr) 14px var(--mindmap-drawer-width);
  }
 
  .mindmap-root-view.is-mobile .mindmap-layout,
@@ -217,22 +281,57 @@
  .mindmap-drawer-resize-handle {
    display: none;
    cursor: col-resize;
-   background: transparent;
    position: relative;
+   background: linear-gradient(180deg, rgba(143, 208, 255, 0.08), rgba(143, 208, 255, 0.02));
+   transition: background 120ms ease, box-shadow 120ms ease;
  }
 
  .mindmap-layout.has-drawer .mindmap-drawer-resize-handle {
    display: block;
  }
 
- .mindmap-drawer-resize-handle::after {
+ .mindmap-drawer-resize-handle::before {
    content: "";
    position: absolute;
    top: 0;
    bottom: 0;
-   left: 3px;
-   width: 2px;
-   background: rgba(255, 255, 255, 0.24);
+   left: 50%;
+   width: 10px;
+   transform: translateX(-50%);
+   background: linear-gradient(180deg, rgba(143, 208, 255, 0.04), rgba(143, 208, 255, 0.16), rgba(143, 208, 255, 0.04));
+   opacity: 0.72;
+ }
+
+ .mindmap-drawer-resize-handle::after {
+   content: "";
+   position: absolute;
+   top: 18px;
+   bottom: 18px;
+   left: 50%;
+   width: 4px;
+   transform: translateX(-50%);
+   border-radius: 999px;
+   background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(143, 208, 255, 0.92), rgba(255, 255, 255, 0.24));
+   box-shadow: 0 0 0 1px rgba(143, 208, 255, 0.22), 0 0 16px rgba(143, 208, 255, 0.28);
+ }
+
+ .mindmap-drawer-resize-handle:hover,
+ .mindmap-drawer-resize-handle.is-dragging {
+   background: linear-gradient(180deg, rgba(143, 208, 255, 0.14), rgba(143, 208, 255, 0.06));
+   box-shadow: inset 0 0 0 1px rgba(143, 208, 255, 0.18);
+ }
+
+ .mindmap-selection-marquee {
+   position: absolute;
+   border: 1px solid rgba(143, 208, 255, 0.92);
+   background: rgba(143, 208, 255, 0.16);
+   box-shadow: inset 0 0 0 1px rgba(210, 237, 255, 0.2);
+   pointer-events: none;
+   z-index: 18;
+ }
+
+ .mindmap-selection-marquee.is-hidden {
+   display: none;
  }
 
  .mindmap-canvas {
@@ -354,6 +453,7 @@
  .mindmap-node-inline-input {
    width: 100%;
    height: 100%;
+   box-sizing: border-box;
    border: 1px solid #fff;
    border-radius: 6px;
    background: #455a64;
@@ -361,9 +461,27 @@
    text-align: center;
    font-size: 15px;
    font-weight: 600;
+   line-height: 1.2;
    font-family: "Hannotate SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-   padding: 0 6px;
+   padding: 0 8px;
    outline: none;
+   appearance: none;
+   -webkit-appearance: none;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-node-title,
+ .mindmap-root-view.is-mobile .mindmap-node-title.is-root,
+ .mindmap-root-view.is-mobile .mindmap-node-inline-input {
+   font-family: "PingFang SC", "Hiragino Sans GB", "STHeiti", "Heiti SC", sans-serif;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-node-inline-input {
+   display: block;
+   height: 100%;
+   min-height: 100%;
+   border-radius: 8px;
+   line-height: 1.1;
+   padding: 2px 8px 0;
  }
 
  .mindmap-resize-handle {
@@ -500,9 +618,11 @@
  .mindmap-root-view.is-mobile .mindmap-drawer {
    position: absolute;
    inset: 0;
+   width: 100%;
+   max-width: 100%;
    z-index: 50;
    border-left: none;
-   padding: calc(18px + env(safe-area-inset-top, 0px)) 12px 12px;
+   padding: calc(18px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
  }
 
  .mindmap-drawer-header {
@@ -526,6 +646,7 @@
    overflow: hidden;
    text-overflow: ellipsis;
    white-space: nowrap;
+   display: none;
  }
 
  .mindmap-drawer-header-actions {
