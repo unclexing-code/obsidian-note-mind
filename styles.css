@@ -482,6 +482,7 @@
    line-height: 1.2;
    font-family: "Hannotate SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
    padding: 0 8px;
+   margin: 0;
    outline: none;
    appearance: none;
    -webkit-appearance: none;
@@ -505,6 +506,7 @@
    border-radius: 8px;
    line-height: 1.1;
    padding: 2px 8px 0;
+   margin: 0;
  }
 
  .mindmap-resize-handle {
