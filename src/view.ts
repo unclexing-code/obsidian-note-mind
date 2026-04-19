@@ -25,7 +25,6 @@ export class MindmapView extends ItemView {
   private desktopActionClusterEl!: HTMLDivElement;
   private desktopSyncButtonEl!: HTMLButtonElement;
   private desktopRefreshButtonEl!: HTMLButtonElement;
-  private mobileCenterButtonEl!: HTMLButtonElement;
   private mobileZenButtonEl!: HTMLButtonElement;
   private mobileActionClusterEl!: HTMLDivElement;
   private nodeLinkActionButtonEl!: HTMLButtonElement;
@@ -35,7 +34,6 @@ export class MindmapView extends ItemView {
   private drawerTitleEl!: HTMLHeadingElement;
   private drawerCloseEl!: HTMLButtonElement;
   private noteModeToggleEl!: HTMLButtonElement;
-  private nodeTitleInputEl!: HTMLInputElement;
   private nodeLinkInputEl!: HTMLInputElement;
   private noteSurfaceEl!: HTMLDivElement;
   private noteInputEl!: HTMLTextAreaElement;
@@ -49,6 +47,7 @@ export class MindmapView extends ItemView {
   private saveTimer: number | null = null;
   private pendingRenderFrame: number | null = null;
   private pendingNodeSelectionTimer: number | null = null;
+  private lastMobileNodeTap: { nodeId: string; time: number } | null = null;
   private isDragging = false;
   private dropTargetNodeId: string | null = null;
   private draggingNodeIds = new Set<string>();
@@ -70,10 +69,23 @@ export class MindmapView extends ItemView {
   private shouldCenterOnNextRender = false;
   private shouldFocusRootOnNextRender = false;
   private readonly textMeasureCanvas = document.createElement("canvas");
+  private readonly autoHeightCache = new Map<string, number>();
   private marqueeSelection: { startX: number; startY: number; currentX: number; currentY: number } | null = null;
   private mobileCanvasLongPressTimer: number | null = null;
   private pendingCanvasPanStart: { x: number; y: number; panX: number; panY: number } | null = null;
   private mobileLongPressMarqueeActive = false;
+  private lastMobileCanvasTap: { x: number; y: number; time: number } | null = null;
+  private mobileKeyboardBaseHeight = 0;
+  private isMobileKeyboardVisible = false;
+  private readonly onMobileViewportResize = (): void => {
+    this.updateMobileKeyboardVisibility();
+  };
+  private readonly onMobileViewportScroll = (): void => {
+    this.updateMobileKeyboardVisibility();
+  };
+  private readonly onWindowResize = (): void => {
+    this.updateMobileKeyboardVisibility();
+  };
   private readonly onKeydown = (event: KeyboardEvent): void => {
     if (event.key === "Escape" && !this.drawerEl.hasClass("is-hidden")) {
       event.preventDefault();
@@ -127,6 +139,123 @@ export class MindmapView extends ItemView {
       return true;
     }
     return false;
+  }
+
+  private suppressEditorKeyboardEvent(event: KeyboardEvent): void {
+    event.stopPropagation();
+    if (event.stopImmediatePropagation) {
+      event.stopImmediatePropagation();
+    }
+  }
+
+  private setMobileInputGestureGuard(active: boolean): void {
+    if (!this.isMobileLayout) {
+      return;
+    }
+    this.blockEdgeSidebarGesture = active || this.isZenMode || this.isMobileKeyboardVisible;
+  }
+
+  private hasActiveMobileTextInput(): boolean {
+    if (!this.isMobileLayout) {
+      return false;
+    }
+    if (this.editingNodeId !== null) {
+      return true;
+    }
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement)) {
+      return false;
+    }
+    if (activeElement === this.noteInputEl || activeElement === this.nodeLinkInputEl) {
+      return true;
+    }
+    return activeElement.classList.contains("mindmap-node-inline-input");
+  }
+
+  private getMobileViewportHeight(): number {
+    return window.visualViewport?.height ?? window.innerHeight;
+  }
+
+  private initializeMobileKeyboardTracking(): void {
+    if (!this.isMobileLayout) {
+      return;
+    }
+    const initialHeight = this.getMobileViewportHeight();
+    if (initialHeight > 0) {
+      this.mobileKeyboardBaseHeight = initialHeight;
+    }
+    this.updateMobileKeyboardVisibility();
+  }
+
+  private updateMobileKeyboardVisibility(): void {
+    if (!this.isMobileLayout) {
+      return;
+    }
+    const viewportHeight = this.getMobileViewportHeight();
+    if (viewportHeight <= 0) {
+      return;
+    }
+
+    const hasActiveTextInput = this.hasActiveMobileTextInput();
+    if (!hasActiveTextInput) {
+      if (viewportHeight > this.mobileKeyboardBaseHeight) {
+        this.mobileKeyboardBaseHeight = viewportHeight;
+      }
+      this.isMobileKeyboardVisible = false;
+      this.setMobileInputGestureGuard(false);
+      this.updateMobileActionClusterVisibility();
+      return;
+    }
+
+    if (this.mobileKeyboardBaseHeight <= 0) {
+      this.mobileKeyboardBaseHeight = viewportHeight;
+    }
+
+    const heightDelta = this.mobileKeyboardBaseHeight - viewportHeight;
+    const ratioDelta = this.mobileKeyboardBaseHeight > 0
+      ? heightDelta / this.mobileKeyboardBaseHeight
+      : 0;
+    const keyboardVisible = heightDelta > 120 && ratioDelta > 0.16;
+
+    this.isMobileKeyboardVisible = keyboardVisible;
+    this.setMobileInputGestureGuard(keyboardVisible);
+    this.updateMobileActionClusterVisibility();
+  }
+
+  private attachInputInteractionGuard(element: HTMLInputElement | HTMLTextAreaElement): void {
+    const activateGuard = (): void => {
+      this.setMobileInputGestureGuard(true);
+      this.updateMobileKeyboardVisibility();
+    };
+    const releaseGuard = (): void => {
+      window.setTimeout(() => {
+        const activeElement = document.activeElement;
+        const stillEditing = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
+        this.setMobileInputGestureGuard(stillEditing);
+        this.updateMobileKeyboardVisibility();
+      }, 0);
+    };
+
+    element.addEventListener("focus", activateGuard);
+    element.addEventListener("blur", releaseGuard);
+    element.addEventListener("pointerdown", (event) => {
+      activateGuard();
+      event.stopPropagation();
+    });
+    element.addEventListener("click", (event) => {
+      event.stopPropagation();
+    });
+    element.addEventListener("touchstart", (event) => {
+      activateGuard();
+      event.stopPropagation();
+    }, { passive: true });
+    element.addEventListener("touchmove", (event) => {
+      activateGuard();
+      event.stopPropagation();
+    }, { passive: true });
+    element.addEventListener("touchend", (event) => {
+      event.stopPropagation();
+    }, { passive: true });
   }
 
   private activateMindmapLeaf(): void {
@@ -266,8 +395,7 @@ export class MindmapView extends ItemView {
     const target = event.target;
     if (target instanceof Element && target.closest(".mindmap-canvas")) {
       event.stopPropagation();
-      event.preventDefault();
-      this.handleZenCanvasTouchStart(event);
+      this.onTouchStart(event, true);
       return;
     }
     if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
@@ -284,8 +412,7 @@ export class MindmapView extends ItemView {
     const target = event.target;
     if (target instanceof Element && target.closest(".mindmap-canvas")) {
       event.stopPropagation();
-      event.preventDefault();
-      this.handleZenCanvasTouchMove(event);
+      this.onTouchMove(event, true);
       return;
     }
     if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
@@ -302,8 +429,7 @@ export class MindmapView extends ItemView {
     const target = event.target;
     if (target instanceof Element && target.closest(".mindmap-canvas")) {
       event.stopPropagation();
-      event.preventDefault();
-      this.handleZenCanvasTouchEnd(event);
+      this.onTouchEnd(event, true);
       return;
     }
     if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
@@ -328,7 +454,9 @@ export class MindmapView extends ItemView {
     const first = event.touches.item(0);
     const second = event.touches.item(1);
     if (first && second) {
+      this.clearMobileCanvasLongPressTimer();
       this.touchPanStart = null;
+      this.pendingCanvasPanStart = null;
       this.blockEdgeSidebarGesture = false;
       this.zenTapCandidate = null;
       this.pinchStartDistance = this.getTouchDistance(first, second);
@@ -337,6 +465,7 @@ export class MindmapView extends ItemView {
     }
 
     if (!first) {
+      this.clearMobileCanvasLongPressTimer();
       this.pinchStartDistance = null;
       this.zenTapCandidate = null;
       return;
@@ -346,15 +475,19 @@ export class MindmapView extends ItemView {
     if (target instanceof Element) {
       const isInteractiveControl = !!target.closest(".mindmap-jump-group, .mindmap-mobile-action-cluster, .mindmap-drawer");
       if (isInteractiveControl) {
+        this.clearMobileCanvasLongPressTimer();
         this.touchPanStart = null;
+        this.pendingCanvasPanStart = null;
         this.zenTapCandidate = null;
         return;
       }
       const collapseGroup = target.closest(".mindmap-collapse-group");
       if (collapseGroup) {
+        this.clearMobileCanvasLongPressTimer();
         const nodeGroup = collapseGroup.closest<SVGGElement>(".mindmap-node-group");
         const nodeId = nodeGroup?.dataset.id ?? null;
         this.touchPanStart = null;
+        this.pendingCanvasPanStart = null;
         this.pinchStartDistance = null;
         this.zenTapCandidate = {
           nodeId,
@@ -367,8 +500,10 @@ export class MindmapView extends ItemView {
       }
       const nodeGroup = target.closest<SVGGElement>(".mindmap-node-group");
       if (nodeGroup) {
+        this.clearMobileCanvasLongPressTimer();
         const nodeId = nodeGroup.dataset.id ?? null;
         this.touchPanStart = null;
+        this.pendingCanvasPanStart = null;
         this.pinchStartDistance = null;
         this.zenTapCandidate = {
           nodeId,
@@ -384,18 +519,25 @@ export class MindmapView extends ItemView {
     this.blockEdgeSidebarGesture = true;
     this.pinchStartDistance = null;
     this.zenTapCandidate = null;
-    this.touchPanStart = {
+    this.pendingCanvasPanStart = {
       x: first.clientX,
       y: first.clientY,
       panX: this.panOffset.x,
       panY: this.panOffset.y
     };
-  }
+    const startPoint = this.getDocumentPoint(first.clientX, first.clientY);
+    this.clearMobileCanvasLongPressTimer();
+    this.mobileCanvasLongPressTimer = window.setTimeout(() => {
+      this.mobileCanvasLongPressTimer = null;
+      this.beginSelectionMarquee(startPoint.x, startPoint.y);
+    }, 360);
+  };
 
   private handleZenCanvasTouchMove(event: TouchEvent): void {
     const first = event.touches.item(0);
     const second = event.touches.item(1);
     if (first && second && this.pinchStartDistance !== null) {
+      this.clearMobileCanvasLongPressTimer();
       this.zenTapCandidate = null;
       const nextDistance = this.getTouchDistance(first, second);
       if (nextDistance <= 0) {
@@ -415,7 +557,33 @@ export class MindmapView extends ItemView {
       }
     }
 
-    if (!first || !this.touchPanStart) {
+    if (this.mobileLongPressMarqueeActive && first && this.marqueeSelection) {
+      const point = this.getDocumentPoint(first.clientX, first.clientY);
+      this.marqueeSelection = {
+        startX: this.marqueeSelection.startX,
+        startY: this.marqueeSelection.startY,
+        currentX: point.x,
+        currentY: point.y
+      };
+      this.renderMindmap();
+      return;
+    }
+
+    if (!first) {
+      return;
+    }
+
+    if (this.pendingCanvasPanStart) {
+      const distance = Math.hypot(first.clientX - this.pendingCanvasPanStart.x, first.clientY - this.pendingCanvasPanStart.y);
+      if (distance > 10) {
+        this.clearMobileCanvasLongPressTimer();
+        this.touchPanStart = this.pendingCanvasPanStart;
+        this.pendingCanvasPanStart = null;
+        this.lastMobileCanvasTap = null;
+      }
+    }
+
+    if (!this.touchPanStart) {
       return;
     }
 
@@ -451,41 +619,62 @@ export class MindmapView extends ItemView {
       return;
     }
 
+    const hadPendingCanvasTap = !!this.pendingCanvasPanStart;
+    const hadActivePan = !!this.touchPanStart;
     const tapCandidate = this.zenTapCandidate;
     this.zenTapCandidate = null;
     this.pinchStartDistance = null;
     this.touchPanStart = null;
+    this.pendingCanvasPanStart = null;
     this.blockEdgeSidebarGesture = true;
 
-    if (!tapCandidate || !tapCandidate.nodeId || !this.doc) {
+    this.clearMobileCanvasLongPressTimer();
+    if (this.mobileLongPressMarqueeActive) {
+      this.finishSelectionMarquee();
+      this.lastMobileCanvasTap = null;
       return;
     }
 
-    const node = findNodeById(this.doc, tapCandidate.nodeId);
-    if (!node) {
-      return;
-    }
+    if (tapCandidate?.nodeId && this.doc) {
+      const node = findNodeById(this.doc, tapCandidate.nodeId);
+      if (!node) {
+        return;
+      }
 
-    if (tapCandidate.isCollapseToggle) {
-      node.collapsed = !node.collapsed;
-      this.normalizeLayout();
-      this.requestSave();
+      if (tapCandidate.isCollapseToggle) {
+        node.collapsed = !node.collapsed;
+        this.normalizeLayout();
+        this.requestSave();
+        this.renderMindmap();
+        return;
+      }
+
+      const now = Date.now();
+      if (this.lastZenNodeTap && this.lastZenNodeTap.nodeId === node.id && now - this.lastZenNodeTap.time <= 320) {
+        this.lastZenNodeTap = null;
+        this.selectedNodeId = node.id;
+        this.startInlineNodeEdit(node.id);
+        return;
+      }
+
+      this.lastZenNodeTap = { nodeId: node.id, time: now };
+      this.setSingleSelectedNode(node.id);
+      this.focusContainerWithoutScroll();
       this.renderMindmap();
       return;
     }
 
-    const now = Date.now();
-    if (this.lastZenNodeTap && this.lastZenNodeTap.nodeId === node.id && now - this.lastZenNodeTap.time <= 320) {
-      this.lastZenNodeTap = null;
-      this.selectedNodeId = node.id;
-      this.startInlineNodeEdit(node.id);
+    if (!hadActivePan && hadPendingCanvasTap && event.changedTouches.length === 1) {
+      const touch = event.changedTouches.item(0);
+      if (touch) {
+        this.handleMobileCanvasDoubleTap(touch.clientX, touch.clientY);
+      }
       return;
     }
 
-    this.lastZenNodeTap = { nodeId: node.id, time: now };
-    this.setSingleSelectedNode(node.id);
-    this.focusContainerWithoutScroll();
-    this.renderMindmap();
+    if (hadActivePan) {
+      this.lastMobileCanvasTap = null;
+    }
   }
 
   private shouldAllowZenGestureTarget(target: EventTarget | null): boolean {
@@ -499,15 +688,16 @@ export class MindmapView extends ItemView {
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) {
       this.zoomAt(event.clientX, event.clientY, -event.deltaY * 0.0015);
+      this.updateViewportTransform();
       return;
     }
     this.panOffset.x -= event.deltaX;
     this.panOffset.y -= event.deltaY;
-    this.renderMindmap();
+    this.updateViewportTransform();
   };
 
-  private readonly onTouchStart = (event: TouchEvent): void => {
-    if (this.isZenMode && this.isMobileLayout) {
+  private readonly onTouchStart = (event: TouchEvent, allowInZenMode = false): void => {
+    if (this.isZenMode && this.isMobileLayout && !allowInZenMode) {
       return;
     }
     const first = event.touches.item(0);
@@ -569,8 +759,24 @@ export class MindmapView extends ItemView {
     }, 360);
   };
 
-  private readonly onTouchMove = (event: TouchEvent): void => {
-    if (this.isZenMode && this.isMobileLayout) {
+  private handleMobileCanvasDoubleTap(clientX: number, clientY: number): boolean {
+    if (!this.doc) {
+      return false;
+    }
+    const lastTap = this.lastMobileCanvasTap;
+    const now = Date.now();
+    if (lastTap && now - lastTap.time <= 320 && Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= 18) {
+      this.lastMobileCanvasTap = null;
+      this.centerViewportOnRoot(this.doc.root, visibleNodes(this.doc.root));
+      this.updateViewportTransform();
+      return true;
+    }
+    this.lastMobileCanvasTap = { x: clientX, y: clientY, time: now };
+    return false;
+  }
+
+  private readonly onTouchMove = (event: TouchEvent, allowInZenMode = false): void => {
+    if (this.isZenMode && this.isMobileLayout && !allowInZenMode) {
       return;
     }
     const first = event.touches.item(0);
@@ -584,8 +790,9 @@ export class MindmapView extends ItemView {
       }
       const centerX = (first.clientX + second.clientX) / 2;
       const centerY = (first.clientY + second.clientY) / 2;
-      const nextScale = Math.min(2.8, Math.max(0.4, this.pinchStartScale * (nextDistance / this.pinchStartDistance)));
+      const nextScale = Math.min(3.6, Math.max(0.25, this.pinchStartScale * (nextDistance / this.pinchStartDistance)));
       this.setZoomAt(centerX, centerY, nextScale);
+      this.updateViewportTransform();
       return;
     }
 
@@ -602,7 +809,7 @@ export class MindmapView extends ItemView {
         currentX: point.x,
         currentY: point.y
       };
-      this.renderMindmap();
+      this.updateMarqueeOverlay();
       return;
     }
 
@@ -626,16 +833,31 @@ export class MindmapView extends ItemView {
     event.preventDefault();
     this.panOffset.x = this.touchPanStart.panX + (first.clientX - this.touchPanStart.x);
     this.panOffset.y = this.touchPanStart.panY + (first.clientY - this.touchPanStart.y);
-    this.renderMindmap();
+    this.updateViewportTransform();
   };
 
-  private readonly onTouchEnd = (): void => {
-    if (this.isZenMode && this.isMobileLayout) {
+  private readonly onTouchEnd = (event: TouchEvent, allowInZenMode = false): void => {
+    if (this.isZenMode && this.isMobileLayout && !allowInZenMode) {
       return;
     }
+    const hadPendingCanvasTap = !!this.pendingCanvasPanStart;
+    const hadActivePan = !!this.touchPanStart;
     this.clearMobileCanvasLongPressTimer();
     if (this.mobileLongPressMarqueeActive) {
       this.finishSelectionMarquee();
+      this.lastMobileCanvasTap = null;
+    } else if (this.isMobileLayout && event.changedTouches.length === 1 && !hadActivePan && hadPendingCanvasTap) {
+      const touch = event.changedTouches.item(0);
+      if (touch) {
+        const centered = this.handleMobileCanvasDoubleTap(touch.clientX, touch.clientY);
+        if (centered) {
+          event.preventDefault();
+        } else {
+          this.clearCanvasSelection();
+        }
+      }
+    } else if (hadActivePan) {
+      this.lastMobileCanvasTap = null;
     }
     this.pinchStartDistance = null;
     this.touchPanStart = null;
@@ -664,12 +886,7 @@ export class MindmapView extends ItemView {
     let marqueeStarted = false;
 
     const clearSelection = (): void => {
-      if (this.selectedNodeId !== null || this.editingNodeId !== null || this.selectedNodeIds.size > 0) {
-        this.selectedNodeId = null;
-        this.selectedNodeIds.clear();
-        this.editingNodeId = null;
-        this.renderMindmap();
-      }
+      this.clearCanvasSelection();
     };
 
     const finishMarquee = (): void => {
@@ -777,6 +994,9 @@ export class MindmapView extends ItemView {
       window.addEventListener("touchend", this.onWindowTouchEnd, { passive: false, capture: true });
       window.addEventListener("touchcancel", this.onWindowTouchEnd, { passive: false, capture: true });
       window.addEventListener("wheel", this.onWindowWheel, { passive: false, capture: true });
+      window.addEventListener("resize", this.onWindowResize);
+      window.visualViewport?.addEventListener("resize", this.onMobileViewportResize);
+      window.visualViewport?.addEventListener("scroll", this.onMobileViewportScroll);
       document.addEventListener("touchstart", this.onWindowTouchStart, { passive: false, capture: true });
       document.addEventListener("touchmove", this.onWindowTouchMove, { passive: false, capture: true });
       document.addEventListener("touchend", this.onWindowTouchEnd, { passive: false, capture: true });
@@ -832,37 +1052,31 @@ export class MindmapView extends ItemView {
       this.unlockMobileZenIfNeeded();
       void this.openLinkedTarget(node.linkTarget);
     });
-    this.mobileSyncButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sync-button", text: "同步" });
-    this.mobileSyncButtonEl.type = "button";
-    this.mobileSyncButtonEl.addEventListener("click", () => {
-      void this.syncNow();
-    });
-    this.mobileRefreshButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-refresh-button", text: "刷新" });
-    this.mobileRefreshButtonEl.type = "button";
-    this.mobileRefreshButtonEl.addEventListener("click", () => {
-      void this.reloadFromDisk(true);
-    });
-    this.mobileNoteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-note-button", text: "📋" });
+    // this.mobileSyncButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sync-button", text: "同步" });
+    // this.mobileSyncButtonEl.type = "button";
+    // this.mobileSyncButtonEl.addEventListener("click", () => {
+    //   void this.syncNow();
+    // });
+    // this.mobileRefreshButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-refresh-button", text: "刷新" });
+    // this.mobileRefreshButtonEl.type = "button";
+    // this.mobileRefreshButtonEl.addEventListener("click", () => {
+    //   void this.reloadFromDisk(true);
+    // });
+    this.mobileNoteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-note-button", text: "笔记" });
     this.mobileNoteButtonEl.type = "button";
     this.mobileNoteButtonEl.addEventListener("click", () => {
       if (this.selectedNodeId) {
         void this.openDrawer(this.selectedNodeId);
       }
     });
-    this.mobileCenterButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-center-button", text: "⦿" });
-    this.mobileCenterButtonEl.type = "button";
-    this.mobileCenterButtonEl.addEventListener("click", () => {
-      if (!this.doc) {
-        return;
-      }
-      this.centerViewportOnRoot(this.doc.root, visibleNodes(this.doc.root));
-      this.renderMindmap();
-    });
     this.mobileZenButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-zen-button", text: "锁住" });
     this.mobileZenButtonEl.type = "button";
     this.mobileZenButtonEl.addEventListener("click", () => {
       this.setZenMode(!this.isZenMode);
     });
+    if (this.isMobileLayout) {
+      this.setZenMode(true);
+    }
     this.updateMobileActionButtons();
     this.drawerResizeHandleEl = this.layoutEl.createDiv({ cls: "mindmap-drawer-resize-handle" });
     this.drawerResizeHandleEl.addEventListener("pointerdown", (event) => this.startDrawerResize(event));
@@ -898,35 +1112,36 @@ export class MindmapView extends ItemView {
     this.drawerCloseEl.addEventListener("click", () => {
       this.closeDrawer();
     });
-    this.nodeTitleInputEl = this.drawerEl.createEl("input", {
-      cls: "mindmap-node-title-input",
-      type: "text"
-    });
-    this.nodeTitleInputEl.placeholder = "节点标题";
-    this.nodeTitleInputEl.addEventListener("input", () => {
-      if (!this.doc || !this.selectedNodeId) {
-        return;
-      }
-      const node = findNodeById(this.doc, this.selectedNodeId);
-      if (!node) {
-        return;
-      }
-      const nextTitle = this.nodeTitleInputEl.value.trim();
-      node.title = nextTitle.length > 0 ? nextTitle : "未命名节点";
-      this.drawerTitleEl.setText(`${node.title}`);
-      if (node.id === this.doc.root.id) {
-        this.refreshTabTitle();
-      }
-      this.normalizeLayoutKeepingNodePosition(node.id);
-      this.requestSave();
-      this.renderMindmap();
-    });
+    // this.nodeTitleInputEl = this.drawerEl.createEl("input", {
+    //   cls: "mindmap-node-title-input",
+    //   type: "text"
+    // });
+    // this.nodeTitleInputEl.placeholder = "节点标题";
+    // this.nodeTitleInputEl.addEventListener("input", () => {
+    //   if (!this.doc || !this.selectedNodeId) {
+    //     return;
+    //   }
+    //   const node = findNodeById(this.doc, this.selectedNodeId);
+    //   if (!node) {
+    //     return;
+    //   }
+    //   const nextTitle = this.nodeTitleInputEl.value.trim();
+    //   node.title = nextTitle.length > 0 ? nextTitle : "未命名节点";
+    //   this.drawerTitleEl.setText(`${node.title}`);
+    //   if (node.id === this.doc.root.id) {
+    //     this.refreshTabTitle();
+    //   }
+    //   this.normalizeLayoutKeepingNodePosition(node.id);
+    //   this.requestSave();
+    //   this.renderMindmap();
+    // });
     const nodeLinkActionsEl = this.drawerEl.createDiv({ cls: "mindmap-node-link-actions" });
     this.nodeLinkInputEl = nodeLinkActionsEl.createEl("input", {
       cls: "mindmap-node-link-input",
       type: "text"
     });
     this.nodeLinkInputEl.placeholder = "输入链接目标：导图或笔记路径";
+    this.attachInputInteractionGuard(this.nodeLinkInputEl);
     this.nodeLinkActionButtonEl = nodeLinkActionsEl.createEl("button", {
       cls: "mindmap-node-link-action-button is-disabled",
       text: "跳转"
@@ -961,9 +1176,16 @@ export class MindmapView extends ItemView {
     this.noteInputEl = this.noteSurfaceEl.createEl("textarea", {
       cls: "mindmap-note-input"
     });
+    this.attachInputInteractionGuard(this.noteInputEl);
     this.noteInputEl.placeholder = "使用 Markdown 记录节点笔记...";
     this.notePreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-preview markdown-preview-view" });
 
+    this.noteInputEl.addEventListener("focus", () => {
+      this.updateMobileActionClusterVisibility();
+    });
+    this.noteInputEl.addEventListener("blur", () => {
+      window.setTimeout(() => this.updateMobileActionClusterVisibility(), 0);
+    });
     this.noteInputEl.addEventListener("input", () => {
       if (!this.doc || !this.selectedNodeId) {
         return;
@@ -980,11 +1202,21 @@ export class MindmapView extends ItemView {
       void this.handlePaste(event);
     });
     this.noteInputEl.addEventListener("keydown", (event) => {
+      this.suppressEditorKeyboardEvent(event);
+      if (event.key === "Tab") {
+        event.preventDefault();
+        this.indentNoteSelection(event.shiftKey);
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         this.setNoteEditing(false);
       }
     });
+
+    if (this.isMobileLayout) {
+      this.initializeMobileKeyboardTracking();
+    }
 
     this.svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svgEl.classList.add("mindmap-svg");
@@ -1028,6 +1260,9 @@ export class MindmapView extends ItemView {
       window.removeEventListener("touchend", this.onWindowTouchEnd, true);
       window.removeEventListener("touchcancel", this.onWindowTouchEnd, true);
       window.removeEventListener("wheel", this.onWindowWheel, true);
+      window.removeEventListener("resize", this.onWindowResize);
+      window.visualViewport?.removeEventListener("resize", this.onMobileViewportResize);
+      window.visualViewport?.removeEventListener("scroll", this.onMobileViewportScroll);
       document.removeEventListener("touchstart", this.onWindowTouchStart, true);
       document.removeEventListener("touchmove", this.onWindowTouchMove, true);
       document.removeEventListener("touchend", this.onWindowTouchEnd, true);
@@ -1122,11 +1357,38 @@ export class MindmapView extends ItemView {
     });
   }
 
+  private updateViewportTransform(): void {
+    if (!this.graphLayerEl) {
+      return;
+    }
+    this.graphLayerEl.setAttribute(
+      "transform",
+      `translate(${this.panOffset.x}, ${this.panOffset.y}) scale(${this.zoomScale})`
+    );
+  }
+
+  private updateMarqueeOverlay(): void {
+    if (!this.marqueeEl) {
+      return;
+    }
+    if (this.marqueeSelection) {
+      const rect = this.getMarqueeClientRect(this.marqueeSelection);
+      this.marqueeEl.removeClass("is-hidden");
+      this.marqueeEl.style.left = `${rect.left}px`;
+      this.marqueeEl.style.top = `${rect.top}px`;
+      this.marqueeEl.style.width = `${rect.width}px`;
+      this.marqueeEl.style.height = `${rect.height}px`;
+    } else {
+      this.marqueeEl.addClass("is-hidden");
+    }
+  }
+
   private renderMindmapNow(): void {
     if (!this.graphLayerEl) {
       return;
     }
     this.graphLayerEl.innerHTML = "";
+    this.autoHeightCache.clear();
     this.updateMobileActionButtons();
     if (!this.doc) {
       return;
@@ -1143,10 +1405,7 @@ export class MindmapView extends ItemView {
       this.shouldCenterOnNextRender = false;
     }
 
-    this.graphLayerEl.setAttribute(
-      "transform",
-      `translate(${this.panOffset.x}, ${this.panOffset.y}) scale(${this.zoomScale})`
-    );
+    this.updateViewportTransform();
 
     const draggingIds = this.draggingNodeIds.size > 0
       ? new Set(this.draggingNodeIds)
@@ -1159,16 +1418,10 @@ export class MindmapView extends ItemView {
           : null;
       })();
 
-    if (this.marqueeSelection) {
-      const rect = this.getMarqueeClientRect(this.marqueeSelection);
-      this.marqueeEl.removeClass("is-hidden");
-      this.marqueeEl.style.left = `${rect.left}px`;
-      this.marqueeEl.style.top = `${rect.top}px`;
-      this.marqueeEl.style.width = `${rect.width}px`;
-      this.marqueeEl.style.height = `${rect.height}px`;
-    } else {
-      this.marqueeEl.addClass("is-hidden");
-    }
+    this.updateMarqueeOverlay();
+
+    const edgeFragment = document.createDocumentFragment();
+    const nodeFragment = document.createDocumentFragment();
 
     const drawOrthogonalConnectors = (node: MindmapNode): void => {
       if (node.collapsed || node.children.length === 0) {
@@ -1187,7 +1440,7 @@ export class MindmapView extends ItemView {
         if (draggingIds?.has(node.id) || draggingIds?.has(child.id)) {
           directPath.classList.add("is-dragging");
         }
-        this.graphLayerEl.appendChild(directPath);
+        edgeFragment.appendChild(directPath);
         drawOrthogonalConnectors(child);
         return;
       }
@@ -1214,7 +1467,7 @@ export class MindmapView extends ItemView {
           if (draggingIds?.has(node.id) || node.children.some((child) => draggingIds?.has(child.id))) {
             trunk.classList.add("is-dragging");
           }
-          this.graphLayerEl.appendChild(trunk);
+          edgeFragment.appendChild(trunk);
         }
       }
 
@@ -1224,7 +1477,7 @@ export class MindmapView extends ItemView {
       if (draggingIds?.has(node.id) || node.children.some((child) => draggingIds?.has(child.id))) {
         parentPath.classList.add("is-dragging");
       }
-      this.graphLayerEl.appendChild(parentPath);
+      edgeFragment.appendChild(parentPath);
 
       childAnchors.forEach(({ child, x, y }) => {
         const childPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -1233,12 +1486,13 @@ export class MindmapView extends ItemView {
         if (draggingIds?.has(node.id) || draggingIds?.has(child.id)) {
           childPath.classList.add("is-dragging");
         }
-        this.graphLayerEl.appendChild(childPath);
+        edgeFragment.appendChild(childPath);
         drawOrthogonalConnectors(child);
       });
     };
 
     drawOrthogonalConnectors(this.doc.root);
+    this.graphLayerEl.appendChild(edgeFragment);
 
     const nodesToRender = draggingIds
       ? [
@@ -1374,6 +1628,9 @@ export class MindmapView extends ItemView {
           window.clearTimeout(this.pendingNodeSelectionTimer);
           this.pendingNodeSelectionTimer = null;
         }
+        if (this.isMobileLayout) {
+          return;
+        }
         if (event.detail >= 2) {
           event.preventDefault();
           event.stopPropagation();
@@ -1414,8 +1671,10 @@ export class MindmapView extends ItemView {
         this.renderMindmap();
         this.openNodeMenu(event, node.id);
       });
-      this.graphLayerEl.appendChild(group);
+      nodeFragment.appendChild(group);
     });
+
+    this.graphLayerEl.appendChild(nodeFragment);
   }
 
   private startDrag(event: PointerEvent, node: MindmapNode): void {
@@ -1499,7 +1758,7 @@ export class MindmapView extends ItemView {
               siblingSortActive = true;
               this.selectedNodeId = selectedRoots[0].id;
               this.selectedNodeIds = new Set([selectedRoots[0].id]);
-              this.normalizeLayout();
+              this.normalizeLayoutKeepingNodePosition(this.doc.root.id);
               draggingNodes.forEach((current) => {
                 const preserved = preservedPositions.get(current.id);
                 if (!preserved) {
@@ -1530,9 +1789,19 @@ export class MindmapView extends ItemView {
           upEvent.pointerType !== "mouse" &&
           !(upEvent.target instanceof Element && upEvent.target.closest(".mindmap-collapse-group, .mindmap-jump-group"))
         ) {
-          this.setSingleSelectedNode(node.id);
-          this.focusContainerWithoutScroll();
-          this.renderMindmap();
+          const now = Date.now();
+          if (this.lastMobileNodeTap && this.lastMobileNodeTap.nodeId === node.id && now - this.lastMobileNodeTap.time <= 320) {
+            this.lastMobileNodeTap = null;
+            this.setSingleSelectedNode(node.id);
+            this.startInlineNodeEdit(node.id);
+          } else {
+            this.lastMobileNodeTap = { nodeId: node.id, time: now };
+            this.setSingleSelectedNode(node.id);
+            this.focusContainerWithoutScroll();
+            this.renderMindmap();
+          }
+        } else {
+          this.lastMobileNodeTap = null;
         }
         return;
       }
@@ -1766,7 +2035,7 @@ export class MindmapView extends ItemView {
     this.drawerTitleEl.setText(`${node.title}`);
     const drawerHeaderPathEl = this.drawerHeaderEl.querySelector<HTMLElement>(".mindmap-drawer-header-path");
     drawerHeaderPathEl?.setText(this.doc?.selfPath ?? this.file?.path ?? "");
-    this.nodeTitleInputEl.value = node.title;
+    // this.nodeTitleInputEl.value = node.title;
     this.nodeLinkInputEl.value = node.linkTarget ?? "";
     this.updateNodeLinkActionButton(node.linkTarget ?? "");
     this.noteInputEl.value = node.note ?? "";
@@ -2197,10 +2466,16 @@ export class MindmapView extends ItemView {
       return;
     }
     const anchorNodeId = nodeId;
-    const sibling = addChildNode(this.doc, parentLookup.parent.id);
-    if (!sibling) {
-      return;
-    }
+    const insertIndex = parentLookup.index + 1;
+    const sibling = {
+      id: crypto.randomUUID(),
+      title: `新节点 ${parentLookup.parent.children.length + 1}`,
+      x: parentLookup.parent.x + 180,
+      y: parentLookup.parent.y + insertIndex * 72,
+      children: []
+    };
+    parentLookup.parent.children.splice(insertIndex, 0, sibling);
+    parentLookup.parent.collapsed = false;
     this.setSingleSelectedNode(sibling.id);
     this.editingNodeId = sibling.id;
     this.playNodeActionSound("add");
@@ -2353,7 +2628,7 @@ export class MindmapView extends ItemView {
     const rect = this.svgEl.getBoundingClientRect();
     const beforeX = (clientX - rect.left - this.panOffset.x) / this.zoomScale;
     const beforeY = (clientY - rect.top - this.panOffset.y) / this.zoomScale;
-    const nextScale = Math.min(2.8, Math.max(0.4, this.zoomScale * (1 + zoomDelta)));
+    const nextScale = Math.min(3.6, Math.max(0.25, this.zoomScale * (1 + zoomDelta)));
     this.applyZoomFromPoint(clientX, clientY, beforeX, beforeY, nextScale);
   }
 
@@ -2378,7 +2653,8 @@ export class MindmapView extends ItemView {
     this.zoomScale = nextScale;
     this.panOffset.x = clientX - rect.left - beforeX * this.zoomScale;
     this.panOffset.y = clientY - rect.top - beforeY * this.zoomScale;
-    this.renderMindmap();
+    this.updateViewportTransform();
+    this.updateMarqueeOverlay();
   }
 
   private getTouchDistance(first: Touch, second: Touch): number {
@@ -2445,9 +2721,9 @@ export class MindmapView extends ItemView {
       maxVisibleWidth = Math.max(maxVisibleWidth, size.width);
     });
 
-    const horizontalPadding = this.isMobileLayout ? 32 : 80;
-    const targetVisibleWidth = Math.max(rootSize.width * 2.8, maxVisibleWidth * 1.35);
-    const fitScale = Math.min(1.15, Math.max(0.55, (viewportWidth - horizontalPadding * 2) / targetVisibleWidth));
+    const horizontalPadding = this.isMobileLayout ? 20 : 56;
+    const targetVisibleWidth = Math.max(rootSize.width * 3.6, maxVisibleWidth * 1.75);
+    const fitScale = Math.min(1, Math.max(0.38, (viewportWidth - horizontalPadding * 2) / targetVisibleWidth));
 
     this.zoomScale = fitScale;
     this.panOffset.x = viewportWidth / 2 - root.x * this.zoomScale;
@@ -2480,10 +2756,10 @@ export class MindmapView extends ItemView {
 
     const contentWidth = Math.max(1, maxX - minX);
     const contentHeight = Math.max(1, maxY - minY);
-    const padding = this.isMobileLayout ? 28 : 56;
+    const padding = this.isMobileLayout ? 16 : 40;
     const availableWidth = Math.max(1, viewportWidth - padding * 2);
     const availableHeight = Math.max(1, viewportHeight - padding * 2);
-    const fitScale = Math.min(1.2, Math.max(0.45, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)));
+    const fitScale = Math.min(1.05, Math.max(0.32, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)));
 
     this.zoomScale = fitScale;
     const contentCenterX = (minX + maxX) / 2;
@@ -2496,7 +2772,7 @@ export class MindmapView extends ItemView {
     if (!this.doc) {
       return;
     }
-    const levelGap = 220;
+    const horizontalGap = 60;
     const verticalGap = 34;
     const root = this.doc.root;
 
@@ -2512,10 +2788,20 @@ export class MindmapView extends ItemView {
       return Math.max(nodeHeight, childrenHeight);
     };
 
-    const place = (node: MindmapNode, depth: number, topY: number): number => {
+    const place = (
+      node: MindmapNode,
+      topY: number,
+      parent: MindmapNode | null
+    ): number => {
       const size = this.ensureNodeSize(node);
       const subtreeHeight = measureSubtreeHeight(node);
-      node.x = root.x + depth * levelGap;
+
+      if (parent) {
+        const parentSize = this.ensureNodeSize(parent);
+        node.x = parent.x + parentSize.width / 2 + horizontalGap + size.width / 2;
+      } else {
+        node.x = root.x;
+      }
 
       if (node.collapsed || node.children.length === 0) {
         node.y = topY + subtreeHeight / 2;
@@ -2526,7 +2812,7 @@ export class MindmapView extends ItemView {
       const childCenters: number[] = [];
       node.children.forEach((child, index) => {
         const childHeight = measureSubtreeHeight(child);
-        place(child, depth + 1, childTop);
+        place(child, childTop, node);
         childCenters.push(child.y);
         childTop += childHeight;
         if (index < node.children.length - 1) {
@@ -2548,7 +2834,7 @@ export class MindmapView extends ItemView {
     };
 
     const totalHeight = Math.max(this.ensureNodeSize(root).height, measureSubtreeHeight(root));
-    place(root, 0, root.y - totalHeight / 2);
+    place(root, root.y - totalHeight / 2, null);
   }
 
   private async handlePaste(event: ClipboardEvent): Promise<void> {
@@ -2586,6 +2872,65 @@ export class MindmapView extends ItemView {
     input.setRangeText(text, start, end, "end");
   }
 
+  private indentNoteSelection(outdent: boolean): void {
+    const input = this.noteInputEl;
+    const value = input.value;
+    const selectionStart = input.selectionStart ?? 0;
+    const selectionEnd = input.selectionEnd ?? 0;
+    const lineStart = value.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
+    const nextLineBreak = value.indexOf("\n", selectionEnd);
+    const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
+    const selectedBlock = value.slice(lineStart, lineEnd);
+    const lines = selectedBlock.split("\n");
+
+    if (!outdent) {
+      const indentedLines = lines.map((line) => `\t${line}`);
+      const replacement = indentedLines.join("\n");
+      input.setRangeText(replacement, lineStart, lineEnd, "preserve");
+      const isSingleCursor = selectionStart === selectionEnd;
+      if (isSingleCursor) {
+        const nextPosition = selectionStart + 1;
+        input.setSelectionRange(nextPosition, nextPosition);
+      } else {
+        input.setSelectionRange(selectionStart + 1, selectionEnd + lines.length);
+      }
+    } else {
+      let removedBeforeStart = 0;
+      let removedWithinSelection = 0;
+      const outdentedLines = lines.map((line, index) => {
+        if (line.startsWith("\t")) {
+          if (index === 0) {
+            removedBeforeStart = 1;
+          }
+          removedWithinSelection += 1;
+          return line.slice(1);
+        }
+        if (line.startsWith("  ")) {
+          if (index === 0) {
+            removedBeforeStart = 2;
+          }
+          removedWithinSelection += 2;
+          return line.slice(2);
+        }
+        return line;
+      });
+      const replacement = outdentedLines.join("\n");
+      input.setRangeText(replacement, lineStart, lineEnd, "preserve");
+      const isSingleCursor = selectionStart === selectionEnd;
+      if (isSingleCursor) {
+        const nextPosition = Math.max(lineStart, selectionStart - removedBeforeStart);
+        input.setSelectionRange(nextPosition, nextPosition);
+      } else {
+        input.setSelectionRange(
+          Math.max(lineStart, selectionStart - removedBeforeStart),
+          Math.max(lineStart, selectionEnd - removedWithinSelection)
+        );
+      }
+    }
+
+    input.dispatchEvent(new Event("input"));
+  }
+
   private async savePastedImage(file: File): Promise<string | null> {
     if (!this.file) {
       new Notice("请先保存导图文件后再粘贴图片");
@@ -2608,6 +2953,7 @@ export class MindmapView extends ItemView {
     }
     this.noteSurfaceEl.toggleClass("is-editing", editing);
     this.noteModeToggleEl.setText(editing ? "预览" : "编辑");
+    this.updateMobileActionClusterVisibility();
     if (editing) {
       this.notePreviewEl.addClass("is-live-hidden");
       window.setTimeout(() => this.noteInputEl.focus({ preventScroll: true }), 0);
@@ -2622,6 +2968,33 @@ export class MindmapView extends ItemView {
     this.drawerEl.addClass("is-hidden");
     this.layoutEl.removeClass("has-drawer");
     this.setNoteEditing(false);
+    this.updateMobileKeyboardVisibility();
+  }
+
+  private clearCanvasSelection(): void {
+    if (this.selectedNodeId === null && this.editingNodeId === null && this.selectedNodeIds.size === 0) {
+      return;
+    }
+    this.selectedNodeId = null;
+    this.selectedNodeIds.clear();
+    this.editingNodeId = null;
+    this.updateMobileActionClusterVisibility();
+    this.renderMindmap();
+  }
+
+  private updateMobileActionClusterVisibility(): void {
+    if (!this.isMobileLayout || !this.mobileActionClusterEl) {
+      return;
+    }
+    const hidden = this.editingNodeId !== null || this.isMobileKeyboardVisible;
+    this.mobileActionClusterEl.toggleClass("is-editing-hidden", hidden);
+  }
+
+  private setMobileActionClusterEditingHidden(hidden: boolean): void {
+    if (!this.isMobileLayout || !this.mobileActionClusterEl) {
+      return;
+    }
+    this.mobileActionClusterEl.toggleClass("is-editing-hidden", hidden);
   }
 
   private setSingleSelectedNode(nodeId: string | null): void {
@@ -2630,6 +3003,8 @@ export class MindmapView extends ItemView {
     if (nodeId !== this.editingNodeId) {
       this.editingNodeId = null;
     }
+    this.updateMobileKeyboardVisibility();
+    this.updateMobileActionClusterVisibility();
     void this.syncOpenDrawerWithSelection();
   }
 
@@ -2641,6 +3016,8 @@ export class MindmapView extends ItemView {
     this.selectedNodeId = nodeId;
     this.selectedNodeIds = new Set([nodeId]);
     this.editingNodeId = nodeId;
+    this.updateMobileKeyboardVisibility();
+    this.updateMobileActionClusterVisibility();
     this.renderMindmap();
   }
 
@@ -2664,12 +3041,14 @@ export class MindmapView extends ItemView {
     input.className = "mindmap-node-inline-input";
     input.value = node.title;
     input.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+    this.attachInputInteractionGuard(input);
     input.addEventListener("pointerdown", (event) => event.stopPropagation());
     input.addEventListener("click", (event) => event.stopPropagation());
 
-    const commit = (createNextSibling: boolean): void => {
+    const commit = (): void => {
       if (!this.doc) {
         this.editingNodeId = null;
+        this.updateMobileActionClusterVisibility();
         this.renderMindmap();
         return;
       }
@@ -2685,13 +3064,6 @@ export class MindmapView extends ItemView {
       this.normalizeLayoutKeepingNodePosition(node.id);
       this.requestSave();
       this.renderMindmap();
-      if (createNextSibling) {
-        window.setTimeout(() => {
-          if (this.selectedNodeId === node.id) {
-            this.createSiblingNode(node.id);
-          }
-        }, 0);
-      }
     };
 
     const cancel = (): void => {
@@ -2701,19 +3073,25 @@ export class MindmapView extends ItemView {
     };
 
     input.addEventListener("keydown", (event) => {
+      this.suppressEditorKeyboardEvent(event);
       if (event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        commit(true);
+        commit();
         return;
       }
       if (event.key === "Escape") {
         event.preventDefault();
         cancel();
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        commit();
       }
     });
     input.addEventListener("blur", () => {
-      commit(false);
+      commit();
     });
 
     foreignObject.appendChild(input);
@@ -2778,6 +3156,11 @@ export class MindmapView extends ItemView {
 
   private measureAutoHeight(title: string, width: number): number {
     const content = title.trim() || " ";
+    const cacheKey = `${width}::${content}`;
+    const cachedHeight = this.autoHeightCache.get(cacheKey);
+    if (cachedHeight !== undefined) {
+      return cachedHeight;
+    }
     const ctx = this.textMeasureCanvas.getContext("2d");
     if (!ctx) {
       return MindmapView.DEFAULT_NODE_HEIGHT;
@@ -2804,6 +3187,8 @@ export class MindmapView extends ItemView {
 
     const lineHeight = 15 * 1.45;
     const verticalPadding = 20;
-    return Math.max(MindmapView.DEFAULT_NODE_HEIGHT, Math.ceil(totalLines * lineHeight + verticalPadding));
+    const height = Math.max(MindmapView.DEFAULT_NODE_HEIGHT, Math.ceil(totalLines * lineHeight + verticalPadding));
+    this.autoHeightCache.set(cacheKey, height);
+    return height;
   }
 }

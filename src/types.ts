@@ -33,7 +33,7 @@ export const createDefaultMindmap = (): MindmapDocument => ({
         title: "子主题 A",
         x: 460,
         y: 140,
-        note: "可以填写任务、引用、清单等内容。",
+        note: "暂无内容",
         children: []
       },
       {
@@ -42,7 +42,7 @@ export const createDefaultMindmap = (): MindmapDocument => ({
         x: 460,
         y: 260,
         linkTarget: "",
-        note: "设置链接后可跳转到其他导图文件或普通笔记。",
+        note: "暂无内容",
         children: []
       }
     ]
