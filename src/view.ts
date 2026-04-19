@@ -17,6 +17,7 @@ export class MindmapView extends ItemView {
   private layoutEl!: HTMLDivElement;
   private canvasEl!: HTMLDivElement;
   private mobileAddButtonEl!: HTMLButtonElement;
+  private mobileUndoButtonEl!: HTMLButtonElement;
   private mobileDeleteButtonEl!: HTMLButtonElement;
   private mobileNoteButtonEl!: HTMLButtonElement;
   private mobileLinkButtonEl!: HTMLButtonElement;
@@ -66,6 +67,7 @@ export class MindmapView extends ItemView {
   private blockEdgeSidebarGesture = false;
   private isZenMode = false;
   private navigationStack: string[] = [];
+  private undoStack: MindmapDocument[] = [];
   private shouldCenterOnNextRender = false;
   private shouldFocusRootOnNextRender = false;
   private readonly textMeasureCanvas = document.createElement("canvas");
@@ -100,6 +102,11 @@ export class MindmapView extends ItemView {
       return;
     }
     if (this.shouldIgnoreMindmapShortcuts(event)) {
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      void this.undoLastAction();
       return;
     }
     if (event.key === "Tab" && (!this.doc || !this.selectedNodeId)) {
@@ -141,10 +148,61 @@ export class MindmapView extends ItemView {
     return false;
   }
 
-  private suppressEditorKeyboardEvent(event: KeyboardEvent): void {
-    event.stopPropagation();
-    if (event.stopImmediatePropagation) {
-      event.stopImmediatePropagation();
+  private cloneDocument(doc: MindmapDocument): MindmapDocument {
+    return JSON.parse(JSON.stringify(doc)) as MindmapDocument;
+  }
+
+  private pushUndoSnapshot(): void {
+    if (!this.doc) {
+      return;
+    }
+    this.undoStack.push(this.cloneDocument(this.doc));
+    if (this.undoStack.length > 50) {
+      this.undoStack.shift();
+    }
+    this.updateUndoButtonState();
+  }
+
+  private restoreDocumentState(snapshot: MindmapDocument): void {
+    this.doc = normalizeMindmapDocument(this.cloneDocument(snapshot));
+    if (this.file) {
+      this.doc.selfPath = this.file.path;
+    }
+    this.refreshTabTitle();
+    if (this.selectedNodeId && !findNodeById(this.doc, this.selectedNodeId)) {
+      this.selectedNodeId = this.doc.root.id;
+    }
+    this.selectedNodeIds = new Set(
+      Array.from(this.selectedNodeIds).filter((id) => !!findNodeById(this.doc!, id))
+    );
+    if (this.selectedNodeIds.size === 0 && this.selectedNodeId) {
+      this.selectedNodeIds = new Set([this.selectedNodeId]);
+    }
+    if (this.editingNodeId && !findNodeById(this.doc, this.editingNodeId)) {
+      this.editingNodeId = null;
+    }
+  }
+
+  private async undoLastAction(): Promise<void> {
+    const snapshot = this.undoStack.pop();
+    if (!snapshot) {
+      return;
+    }
+    this.restoreDocumentState(snapshot);
+    await this.syncOpenDrawerWithSelection();
+    this.updateUndoButtonState();
+    this.requestSave();
+    this.renderMindmap();
+  }
+
+  private updateUndoButtonState(): void {
+    const pendingSteps = this.undoStack.length;
+    if (this.mobileUndoButtonEl) {
+      this.mobileUndoButtonEl.disabled = pendingSteps === 0;
+      this.mobileUndoButtonEl.toggleClass("is-disabled", pendingSteps === 0);
+      this.mobileUndoButtonEl.setAttribute("aria-disabled", pendingSteps === 0 ? "true" : "false");
+      this.mobileUndoButtonEl.setAttribute("data-undo-count", pendingSteps > 0 ? String(pendingSteps) : "");
+      this.mobileUndoButtonEl.setAttribute("aria-label", pendingSteps > 0 ? `撤回，剩余 ${pendingSteps} 步` : "撤回");
     }
   }
 
@@ -1031,6 +1089,12 @@ export class MindmapView extends ItemView {
       }
     });
 
+    this.mobileUndoButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-undo-button", text: "撤回" });
+    this.mobileUndoButtonEl.type = "button";
+    this.mobileUndoButtonEl.addEventListener("click", () => {
+      void this.undoLastAction();
+    });
+
     // 增加“删除节点”按钮
     this.mobileDeleteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-delete-button", text: "-" });
     this.mobileDeleteButtonEl.type = "button";
@@ -1077,6 +1141,7 @@ export class MindmapView extends ItemView {
     if (this.isMobileLayout) {
       this.setZenMode(true);
     }
+    this.updateUndoButtonState();
     this.updateMobileActionButtons();
     this.drawerResizeHandleEl = this.layoutEl.createDiv({ cls: "mindmap-drawer-resize-handle" });
     this.drawerResizeHandleEl.addEventListener("pointerdown", (event) => this.startDrawerResize(event));
@@ -1167,7 +1232,13 @@ export class MindmapView extends ItemView {
       if (!node) {
         return;
       }
-      node.linkTarget = this.nodeLinkInputEl.value.trim();
+      const nextLinkTarget = this.nodeLinkInputEl.value.trim();
+      if (nextLinkTarget === (node.linkTarget ?? "")) {
+        this.updateNodeLinkActionButton(node.linkTarget ?? "");
+        return;
+      }
+      this.pushUndoSnapshot();
+      node.linkTarget = nextLinkTarget;
       this.updateNodeLinkActionButton(node.linkTarget ?? "");
       this.requestSave();
       this.renderMindmap();
@@ -1333,6 +1404,8 @@ export class MindmapView extends ItemView {
     try {
       const raw = await this.app.vault.cachedRead(this.file);
       this.doc = normalizeMindmapDocument(JSON.parse(raw) as MindmapDocument);
+      this.undoStack = [];
+      this.updateUndoButtonState();
       this.normalizeLayout();
       this.refreshTabTitle();
       if (!this.doc.selfPath && this.file) {
@@ -1590,6 +1663,7 @@ export class MindmapView extends ItemView {
         foldGroup.addEventListener("click", (event) => {
           event.stopPropagation();
           event.preventDefault();
+          this.pushUndoSnapshot();
           node.collapsed = !node.collapsed;
           this.normalizeLayout();
           this.requestSave();
@@ -1705,6 +1779,7 @@ export class MindmapView extends ItemView {
     const startClient = { x: event.clientX, y: event.clientY };
     const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
     let dragStarted = false;
+    let hasRecordedUndoSnapshot = false;
 
     const onMove = (moveEvent: PointerEvent): void => {
       const distance = Math.hypot(moveEvent.clientX - startClient.x, moveEvent.clientY - startClient.y);
@@ -1713,6 +1788,10 @@ export class MindmapView extends ItemView {
           return;
         }
         dragStarted = true;
+        if (!hasRecordedUndoSnapshot) {
+          this.pushUndoSnapshot();
+          hasRecordedUndoSnapshot = true;
+        }
         this.isDragging = true;
         this.draggingNodeIds = draggingNodeIds;
         this.selectedNodeId = selectedRootIds.has(node.id) ? node.id : selectedRoots[0]?.id ?? node.id;
@@ -2095,6 +2174,7 @@ export class MindmapView extends ItemView {
     this.mobileDeleteButtonEl?.toggleAttribute("hidden", !canDelete);
     this.mobileLinkButtonEl?.toggleClass("is-hidden", !hasLink);
     this.mobileLinkButtonEl?.toggleAttribute("hidden", !hasLink);
+    this.updateUndoButtonState();
   }
 
   private async renderMarkdown(markdown: string): Promise<void> {
@@ -2440,6 +2520,7 @@ export class MindmapView extends ItemView {
     if (!parent) {
       return;
     }
+    this.pushUndoSnapshot();
     const anchorNodeId = parent.id;
     const child = addChildNode(this.doc, parentId, {
       x: parent.x + 180,
@@ -2465,6 +2546,7 @@ export class MindmapView extends ItemView {
       this.createChildNode(nodeId);
       return;
     }
+    this.pushUndoSnapshot();
     const anchorNodeId = nodeId;
     const insertIndex = parentLookup.index + 1;
     const sibling = {
@@ -2502,6 +2584,7 @@ export class MindmapView extends ItemView {
     if (!accepted) {
       return;
     }
+    this.pushUndoSnapshot();
     const result = removeNode(this.doc, nodeId);
     if (!result) {
       new Notice("删除失败：未找到节点");
@@ -3053,7 +3136,8 @@ export class MindmapView extends ItemView {
         return;
       }
       const nextValue = input.value.trim();
-      if (nextValue) {
+      if (nextValue && nextValue !== node.title) {
+        this.pushUndoSnapshot();
         node.title = nextValue;
       }
       if (node.id === this.doc.root.id) {
@@ -3111,11 +3195,16 @@ export class MindmapView extends ItemView {
     const size = this.ensureNodeSize(node);
     const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
     const startSize = { width: size.width, height: size.height };
+    let hasRecordedUndoSnapshot = false;
 
     const onMove = (moveEvent: PointerEvent): void => {
       const point = this.getDocumentPoint(moveEvent.clientX, moveEvent.clientY);
       const deltaX = point.x - startPoint.x;
       const deltaY = point.y - startPoint.y;
+      if (!hasRecordedUndoSnapshot && (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5)) {
+        this.pushUndoSnapshot();
+        hasRecordedUndoSnapshot = true;
+      }
       node.width = Math.max(MindmapView.MIN_NODE_WIDTH, startSize.width + deltaX);
       node.height = Math.max(MindmapView.MIN_NODE_HEIGHT, startSize.height + deltaY);
       node.manualSize = true;

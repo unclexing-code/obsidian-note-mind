@@ -119,6 +119,7 @@
  }
 
  .mindmap-mobile-add-button,
+ .mindmap-mobile-undo-button,
  .mindmap-mobile-delete-button,
  .mindmap-mobile-note-button,
  .mindmap-mobile-folder-button,
@@ -166,6 +167,7 @@
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-sync-button,
@@ -201,6 +203,7 @@
    line-height: 1;
  }
 
+ .mindmap-mobile-undo-button,
  .mindmap-mobile-delete-button,
  .mindmap-mobile-note-button,
  .mindmap-mobile-sync-button,
@@ -210,6 +213,41 @@
    font-size: 11px;
    font-weight: 700;
    letter-spacing: 0;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button {
+   color: #dbe6ff;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button.is-disabled {
+   opacity: 0.52;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button::after {
+   content: attr(data-undo-count);
+   position: absolute;
+   top: -6px;
+   right: -6px;
+   min-width: 18px;
+   height: 18px;
+   padding: 0 5px;
+   border-radius: 999px;
+   background: #ff8aa5;
+   color: #ffffff;
+   font-size: 10px;
+   font-weight: 800;
+   line-height: 18px;
+   text-align: center;
+   box-shadow: 0 4px 12px rgba(255, 138, 165, 0.38);
+   opacity: 0;
+   transform: scale(0.86);
+   transition: opacity 120ms ease, transform 120ms ease;
+   pointer-events: none;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button[data-undo-count]:not([data-undo-count=""])::after {
+   opacity: 1;
+   transform: scale(1);
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button {
@@ -254,6 +292,7 @@
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button:active,
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button:active,
@@ -265,6 +304,7 @@
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button::before,
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button::before,
@@ -281,6 +321,7 @@
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button,
