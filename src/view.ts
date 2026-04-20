@@ -12,12 +12,18 @@ export class MindmapView extends ItemView {
   private static readonly DEFAULT_DRAWER_WIDTH = 380;
   private static readonly MIN_DRAWER_WIDTH = 300;
   private static readonly MAX_DRAWER_WIDTH = 860;
+  private static readonly MIN_ZOOM_SCALE = 0.1;
+  private static readonly MAX_ZOOM_SCALE = 3;
+  private static readonly MOBILE_NODE_TOOLTIP_REOPEN_DELAY = 420;
+  private static readonly MOBILE_NODE_DRAG_LONG_PRESS_DELAY = 300;
   private file: TFile | null = null;
   private doc: MindmapDocument | null = null;
   private layoutEl!: HTMLDivElement;
   private canvasEl!: HTMLDivElement;
   private mobileAddButtonEl!: HTMLButtonElement;
+  private mobileSiblingAddButtonEl!: HTMLButtonElement;
   private mobileUndoButtonEl!: HTMLButtonElement;
+  private mobileRedoButtonEl!: HTMLButtonElement;
   private mobileDeleteButtonEl!: HTMLButtonElement;
   private mobileNoteButtonEl!: HTMLButtonElement;
   private mobileLinkButtonEl!: HTMLButtonElement;
@@ -28,6 +34,8 @@ export class MindmapView extends ItemView {
   private desktopRefreshButtonEl!: HTMLButtonElement;
   private mobileZenButtonEl!: HTMLButtonElement;
   private mobileActionClusterEl!: HTMLDivElement;
+  private mobileNodeTooltipEl!: HTMLDivElement;
+  private mobileGlobalActionClusterEl!: HTMLDivElement;
   private nodeLinkActionButtonEl!: HTMLButtonElement;
   private drawerResizeHandleEl!: HTMLDivElement;
   private drawerEl!: HTMLDivElement;
@@ -68,27 +76,47 @@ export class MindmapView extends ItemView {
   private isZenMode = false;
   private navigationStack: string[] = [];
   private undoStack: MindmapDocument[] = [];
+  private redoStack: MindmapDocument[] = [];
+  private isApplyingHistory = false;
+  private noteHistoryCapturedForSession = false;
+  private linkHistoryCapturedForSession = false;
   private shouldCenterOnNextRender = false;
   private shouldFocusRootOnNextRender = false;
   private readonly textMeasureCanvas = document.createElement("canvas");
-  private readonly autoHeightCache = new Map<string, number>();
   private marqueeSelection: { startX: number; startY: number; currentX: number; currentY: number } | null = null;
   private mobileCanvasLongPressTimer: number | null = null;
-  private pendingCanvasPanStart: { x: number; y: number; panX: number; panY: number } | null = null;
+  private pendingCanvasPanStart: { x: number; y: number; panX: number; panY: number; startedAt: number; startedOnNode: boolean } | null = null;
   private mobileLongPressMarqueeActive = false;
   private lastMobileCanvasTap: { x: number; y: number; time: number } | null = null;
-  private mobileKeyboardBaseHeight = 0;
-  private isMobileKeyboardVisible = false;
-  private readonly onMobileViewportResize = (): void => {
-    this.updateMobileKeyboardVisibility();
-  };
-  private readonly onMobileViewportScroll = (): void => {
-    this.updateMobileKeyboardVisibility();
-  };
-  private readonly onWindowResize = (): void => {
-    this.updateMobileKeyboardVisibility();
-  };
+  private mobileTooltipNodeId: string | null = null;
+  private dragGhostPositions = new Map<string, { x: number; y: number }>();
   private readonly onKeydown = (event: KeyboardEvent): void => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+      if (this.shouldIgnoreMindmapShortcuts(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (event.shiftKey) {
+        void this.redo();
+      } else {
+        void this.undo();
+      }
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "e") {
+      if (this.shouldIgnoreMindmapShortcuts(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (this.drawerEl.hasClass("is-hidden")) {
+        if (this.selectedNodeId) {
+          void this.openDrawer(this.selectedNodeId);
+        }
+      } else {
+        this.closeDrawer();
+      }
+      return;
+    }
     if (event.key === "Escape" && !this.drawerEl.hasClass("is-hidden")) {
       event.preventDefault();
       this.closeDrawer();
@@ -102,11 +130,6 @@ export class MindmapView extends ItemView {
       return;
     }
     if (this.shouldIgnoreMindmapShortcuts(event)) {
-      return;
-    }
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      void this.undoLastAction();
       return;
     }
     if (event.key === "Tab" && (!this.doc || !this.selectedNodeId)) {
@@ -148,174 +171,6 @@ export class MindmapView extends ItemView {
     return false;
   }
 
-  private cloneDocument(doc: MindmapDocument): MindmapDocument {
-    return JSON.parse(JSON.stringify(doc)) as MindmapDocument;
-  }
-
-  private pushUndoSnapshot(): void {
-    if (!this.doc) {
-      return;
-    }
-    this.undoStack.push(this.cloneDocument(this.doc));
-    if (this.undoStack.length > 50) {
-      this.undoStack.shift();
-    }
-    this.updateUndoButtonState();
-  }
-
-  private restoreDocumentState(snapshot: MindmapDocument): void {
-    this.doc = normalizeMindmapDocument(this.cloneDocument(snapshot));
-    if (this.file) {
-      this.doc.selfPath = this.file.path;
-    }
-    this.refreshTabTitle();
-    if (this.selectedNodeId && !findNodeById(this.doc, this.selectedNodeId)) {
-      this.selectedNodeId = this.doc.root.id;
-    }
-    this.selectedNodeIds = new Set(
-      Array.from(this.selectedNodeIds).filter((id) => !!findNodeById(this.doc!, id))
-    );
-    if (this.selectedNodeIds.size === 0 && this.selectedNodeId) {
-      this.selectedNodeIds = new Set([this.selectedNodeId]);
-    }
-    if (this.editingNodeId && !findNodeById(this.doc, this.editingNodeId)) {
-      this.editingNodeId = null;
-    }
-  }
-
-  private async undoLastAction(): Promise<void> {
-    const snapshot = this.undoStack.pop();
-    if (!snapshot) {
-      return;
-    }
-    this.restoreDocumentState(snapshot);
-    await this.syncOpenDrawerWithSelection();
-    this.updateUndoButtonState();
-    this.requestSave();
-    this.renderMindmap();
-  }
-
-  private updateUndoButtonState(): void {
-    const pendingSteps = this.undoStack.length;
-    if (this.mobileUndoButtonEl) {
-      this.mobileUndoButtonEl.disabled = pendingSteps === 0;
-      this.mobileUndoButtonEl.toggleClass("is-disabled", pendingSteps === 0);
-      this.mobileUndoButtonEl.setAttribute("aria-disabled", pendingSteps === 0 ? "true" : "false");
-      this.mobileUndoButtonEl.setAttribute("data-undo-count", pendingSteps > 0 ? String(pendingSteps) : "");
-      this.mobileUndoButtonEl.setAttribute("aria-label", pendingSteps > 0 ? `撤回，剩余 ${pendingSteps} 步` : "撤回");
-    }
-  }
-
-  private setMobileInputGestureGuard(active: boolean): void {
-    if (!this.isMobileLayout) {
-      return;
-    }
-    this.blockEdgeSidebarGesture = active || this.isZenMode || this.isMobileKeyboardVisible;
-  }
-
-  private hasActiveMobileTextInput(): boolean {
-    if (!this.isMobileLayout) {
-      return false;
-    }
-    if (this.editingNodeId !== null) {
-      return true;
-    }
-    const activeElement = document.activeElement;
-    if (!(activeElement instanceof HTMLElement)) {
-      return false;
-    }
-    if (activeElement === this.noteInputEl || activeElement === this.nodeLinkInputEl) {
-      return true;
-    }
-    return activeElement.classList.contains("mindmap-node-inline-input");
-  }
-
-  private getMobileViewportHeight(): number {
-    return window.visualViewport?.height ?? window.innerHeight;
-  }
-
-  private initializeMobileKeyboardTracking(): void {
-    if (!this.isMobileLayout) {
-      return;
-    }
-    const initialHeight = this.getMobileViewportHeight();
-    if (initialHeight > 0) {
-      this.mobileKeyboardBaseHeight = initialHeight;
-    }
-    this.updateMobileKeyboardVisibility();
-  }
-
-  private updateMobileKeyboardVisibility(): void {
-    if (!this.isMobileLayout) {
-      return;
-    }
-    const viewportHeight = this.getMobileViewportHeight();
-    if (viewportHeight <= 0) {
-      return;
-    }
-
-    const hasActiveTextInput = this.hasActiveMobileTextInput();
-    if (!hasActiveTextInput) {
-      if (viewportHeight > this.mobileKeyboardBaseHeight) {
-        this.mobileKeyboardBaseHeight = viewportHeight;
-      }
-      this.isMobileKeyboardVisible = false;
-      this.setMobileInputGestureGuard(false);
-      this.updateMobileActionClusterVisibility();
-      return;
-    }
-
-    if (this.mobileKeyboardBaseHeight <= 0) {
-      this.mobileKeyboardBaseHeight = viewportHeight;
-    }
-
-    const heightDelta = this.mobileKeyboardBaseHeight - viewportHeight;
-    const ratioDelta = this.mobileKeyboardBaseHeight > 0
-      ? heightDelta / this.mobileKeyboardBaseHeight
-      : 0;
-    const keyboardVisible = heightDelta > 120 && ratioDelta > 0.16;
-
-    this.isMobileKeyboardVisible = keyboardVisible;
-    this.setMobileInputGestureGuard(keyboardVisible);
-    this.updateMobileActionClusterVisibility();
-  }
-
-  private attachInputInteractionGuard(element: HTMLInputElement | HTMLTextAreaElement): void {
-    const activateGuard = (): void => {
-      this.setMobileInputGestureGuard(true);
-      this.updateMobileKeyboardVisibility();
-    };
-    const releaseGuard = (): void => {
-      window.setTimeout(() => {
-        const activeElement = document.activeElement;
-        const stillEditing = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
-        this.setMobileInputGestureGuard(stillEditing);
-        this.updateMobileKeyboardVisibility();
-      }, 0);
-    };
-
-    element.addEventListener("focus", activateGuard);
-    element.addEventListener("blur", releaseGuard);
-    element.addEventListener("pointerdown", (event) => {
-      activateGuard();
-      event.stopPropagation();
-    });
-    element.addEventListener("click", (event) => {
-      event.stopPropagation();
-    });
-    element.addEventListener("touchstart", (event) => {
-      activateGuard();
-      event.stopPropagation();
-    }, { passive: true });
-    element.addEventListener("touchmove", (event) => {
-      activateGuard();
-      event.stopPropagation();
-    }, { passive: true });
-    element.addEventListener("touchend", (event) => {
-      event.stopPropagation();
-    }, { passive: true });
-  }
-
   private activateMindmapLeaf(): void {
     this.app.workspace.revealLeaf(this.leaf);
     void this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
@@ -324,6 +179,176 @@ export class MindmapView extends ItemView {
 
   private focusContainerWithoutScroll(): void {
     this.containerEl.focus({ preventScroll: true });
+  }
+
+  private cloneDocument(doc: MindmapDocument): MindmapDocument {
+    return JSON.parse(JSON.stringify(doc)) as MindmapDocument;
+  }
+
+  private captureHistorySnapshot(): void {
+    if (!this.doc || this.isApplyingHistory) {
+      return;
+    }
+    this.pushHistoryState(this.doc);
+  }
+
+  private pushHistoryState(snapshot: MindmapDocument): void {
+    if (this.isApplyingHistory) {
+      return;
+    }
+    this.undoStack.push(this.cloneDocument(snapshot));
+    if (this.undoStack.length > 100) {
+      this.undoStack.shift();
+    }
+    this.redoStack = [];
+    this.updateMobileActionButtons();
+  }
+
+  private syncSelectionAfterHistoryApply(): void {
+    if (!this.doc) {
+      this.selectedNodeId = null;
+      this.selectedNodeIds.clear();
+      this.editingNodeId = null;
+      if (!this.drawerEl.hasClass("is-hidden")) {
+        this.closeDrawer();
+      }
+      return;
+    }
+    if (!this.selectedNodeId || !findNodeById(this.doc, this.selectedNodeId)) {
+      this.selectedNodeId = this.doc.root.id;
+    }
+    const nextSelectedIds = new Set<string>();
+    this.selectedNodeIds.forEach((id) => {
+      if (findNodeById(this.doc!, id)) {
+        nextSelectedIds.add(id);
+      }
+    });
+    if (nextSelectedIds.size === 0 && this.selectedNodeId) {
+      nextSelectedIds.add(this.selectedNodeId);
+    }
+    this.selectedNodeIds = nextSelectedIds;
+    if (this.editingNodeId && !findNodeById(this.doc, this.editingNodeId)) {
+      this.editingNodeId = null;
+    }
+  }
+
+  private async applyHistoryState(nextDoc: MindmapDocument): Promise<void> {
+    this.doc = normalizeMindmapDocument(this.cloneDocument(nextDoc));
+    this.normalizeLayout();
+    this.refreshTabTitle();
+    this.syncSelectionAfterHistoryApply();
+    this.noteHistoryCapturedForSession = false;
+    this.linkHistoryCapturedForSession = false;
+    await this.syncOpenDrawerWithSelection();
+    this.requestSave();
+    this.renderMindmap();
+    this.updateMobileActionButtons();
+  }
+
+  private async undo(): Promise<void> {
+    if (!this.doc || this.undoStack.length === 0) {
+      return;
+    }
+    const previous = this.undoStack.pop();
+    if (!previous) {
+      return;
+    }
+    this.isApplyingHistory = true;
+    try {
+      this.redoStack.push(this.cloneDocument(this.doc));
+      await this.applyHistoryState(previous);
+    } finally {
+      this.isApplyingHistory = false;
+    }
+  }
+
+  private async redo(): Promise<void> {
+    if (!this.doc || this.redoStack.length === 0) {
+      return;
+    }
+    const next = this.redoStack.pop();
+    if (!next) {
+      return;
+    }
+    this.isApplyingHistory = true;
+    try {
+      this.undoStack.push(this.cloneDocument(this.doc));
+      await this.applyHistoryState(next);
+    } finally {
+      this.isApplyingHistory = false;
+    }
+  }
+
+  private closeMobileNodeTooltip(): void {
+    this.mobileTooltipNodeId = null;
+    this.mobileNodeTooltipEl?.addClass("is-hidden");
+    this.mobileActionClusterEl?.addClass("is-hidden");
+  }
+
+  private openMobileNodeTooltip(nodeId: string): void {
+    if (!this.isMobileLayout || !this.doc) {
+      return;
+    }
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return;
+    }
+    const point = this.getCanvasClientPoint(node.x, node.y);
+    const canvasRect = this.canvasEl.getBoundingClientRect();
+    const viewportPadding = 12;
+    const arrowGap = 10;
+
+    this.mobileTooltipNodeId = nodeId;
+    this.mobileActionClusterEl?.removeClass("is-hidden");
+    this.mobileNodeTooltipEl?.removeClass("is-hidden");
+    this.mobileNodeTooltipEl?.removeClass("is-below");
+    this.mobileNodeTooltipEl?.style.removeProperty("visibility");
+    this.mobileNodeTooltipEl?.style.removeProperty("--mindmap-tooltip-arrow-left");
+    this.mobileNodeTooltipEl.style.visibility = "hidden";
+    this.mobileNodeTooltipEl.style.left = "0px";
+    this.mobileNodeTooltipEl.style.top = "0px";
+
+    const tooltipWidth = this.mobileNodeTooltipEl.offsetWidth || 160;
+    const tooltipHeight = this.mobileNodeTooltipEl.offsetHeight || 60;
+    const minCenterX = viewportPadding + tooltipWidth / 2;
+    const maxCenterX = Math.max(minCenterX, canvasRect.width - viewportPadding - tooltipWidth / 2);
+    const clampedCenterX = Math.min(Math.max(point.x, minCenterX), maxCenterX);
+    const arrowLeft = Math.min(
+      Math.max(point.x - clampedCenterX + tooltipWidth / 2, 18),
+      tooltipWidth - 18
+    );
+
+    const preferredTop = point.y - arrowGap;
+    const topSpace = preferredTop - tooltipHeight;
+    const shouldPlaceBelow = topSpace < viewportPadding && point.y + arrowGap + tooltipHeight <= canvasRect.height - viewportPadding;
+    const tooltipTop = shouldPlaceBelow
+      ? Math.min(canvasRect.height - viewportPadding - tooltipHeight, point.y + arrowGap)
+      : Math.max(viewportPadding, preferredTop);
+
+    this.mobileNodeTooltipEl.style.left = `${clampedCenterX}px`;
+    this.mobileNodeTooltipEl.style.top = `${tooltipTop}px`;
+    this.mobileNodeTooltipEl.style.setProperty("--mindmap-tooltip-arrow-left", `${arrowLeft}px`);
+    this.mobileNodeTooltipEl.toggleClass("is-below", shouldPlaceBelow);
+    this.mobileNodeTooltipEl.style.visibility = "";
+    this.updateMobileActionButtons();
+  }
+
+  private toggleMobileNodeTooltip(nodeId: string): void {
+    if (this.mobileTooltipNodeId === nodeId && !this.mobileNodeTooltipEl?.hasClass("is-hidden")) {
+      this.closeMobileNodeTooltip();
+      return;
+    }
+    this.openMobileNodeTooltip(nodeId);
+  }
+
+  private shouldOpenMobileNodeTooltip(nodeId: string, now: number): boolean {
+    return !!this.lastMobileNodeTap
+      && this.lastMobileNodeTap.nodeId === nodeId
+      && now - this.lastMobileNodeTap.time >= MindmapView.MOBILE_NODE_TOOLTIP_REOPEN_DELAY;
+  }
+
+  private handleMobileUndoButtonClick(): void {
+    void this.undo();
   }
 
   private clearMobileCanvasLongPressTimer(): void {
@@ -370,7 +395,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
       )
     ) {
       return;
@@ -387,7 +412,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
       )
     ) {
       return;
@@ -404,7 +429,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
       )
     ) {
       return;
@@ -456,7 +481,7 @@ export class MindmapView extends ItemView {
       this.onTouchStart(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
       return;
     }
     event.stopPropagation();
@@ -473,7 +498,7 @@ export class MindmapView extends ItemView {
       this.onTouchMove(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
       return;
     }
     event.stopPropagation();
@@ -490,7 +515,7 @@ export class MindmapView extends ItemView {
       this.onTouchEnd(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
       return;
     }
     event.stopPropagation();
@@ -561,7 +586,14 @@ export class MindmapView extends ItemView {
         this.clearMobileCanvasLongPressTimer();
         const nodeId = nodeGroup.dataset.id ?? null;
         this.touchPanStart = null;
-        this.pendingCanvasPanStart = null;
+        this.pendingCanvasPanStart = {
+          x: first.clientX,
+          y: first.clientY,
+          panX: this.panOffset.x,
+          panY: this.panOffset.y,
+          startedAt: Date.now(),
+          startedOnNode: true
+        };
         this.pinchStartDistance = null;
         this.zenTapCandidate = {
           nodeId,
@@ -581,7 +613,9 @@ export class MindmapView extends ItemView {
       x: first.clientX,
       y: first.clientY,
       panX: this.panOffset.x,
-      panY: this.panOffset.y
+      panY: this.panOffset.y,
+      startedAt: Date.now(),
+      startedOnNode: false
     };
     const startPoint = this.getDocumentPoint(first.clientX, first.clientY);
     this.clearMobileCanvasLongPressTimer();
@@ -603,7 +637,10 @@ export class MindmapView extends ItemView {
       }
       const centerX = (first.clientX + second.clientX) / 2;
       const centerY = (first.clientY + second.clientY) / 2;
-      const nextScale = Math.min(2.8, Math.max(0.4, this.pinchStartScale * (nextDistance / this.pinchStartDistance)));
+      const nextScale = Math.min(
+        MindmapView.MAX_ZOOM_SCALE,
+        Math.max(MindmapView.MIN_ZOOM_SCALE, this.pinchStartScale * (nextDistance / this.pinchStartDistance))
+      );
       this.setZoomAt(centerX, centerY, nextScale);
       return;
     }
@@ -781,6 +818,7 @@ export class MindmapView extends ItemView {
     this.blockEdgeSidebarGesture = this.isZenMode;
 
     const target = event.target;
+    const startedOnNode = target instanceof Element && !!target.closest(".mindmap-node-group");
     if (target instanceof Element) {
       const isInteractiveControl = !!target.closest(".mindmap-collapse-group, .mindmap-jump-group, .mindmap-mobile-action-cluster, .mindmap-drawer");
       if (isInteractiveControl) {
@@ -789,7 +827,7 @@ export class MindmapView extends ItemView {
         this.pendingCanvasPanStart = null;
         return;
       }
-      if (target.closest(".mindmap-node-group, .mindmap-resize-handle")) {
+      if (target.closest(".mindmap-resize-handle")) {
         this.clearMobileCanvasLongPressTimer();
         this.touchPanStart = null;
         this.pendingCanvasPanStart = null;
@@ -807,8 +845,14 @@ export class MindmapView extends ItemView {
       x: first.clientX,
       y: first.clientY,
       panX: this.panOffset.x,
-      panY: this.panOffset.y
+      panY: this.panOffset.y,
+      startedAt: Date.now(),
+      startedOnNode
     };
+    if (startedOnNode) {
+      this.clearMobileCanvasLongPressTimer();
+      return;
+    }
     const startPoint = this.getDocumentPoint(first.clientX, first.clientY);
     this.clearMobileCanvasLongPressTimer();
     this.mobileCanvasLongPressTimer = window.setTimeout(() => {
@@ -848,7 +892,10 @@ export class MindmapView extends ItemView {
       }
       const centerX = (first.clientX + second.clientX) / 2;
       const centerY = (first.clientY + second.clientY) / 2;
-      const nextScale = Math.min(3.6, Math.max(0.25, this.pinchStartScale * (nextDistance / this.pinchStartDistance)));
+      const nextScale = Math.min(
+        MindmapView.MAX_ZOOM_SCALE,
+        Math.max(MindmapView.MIN_ZOOM_SCALE, this.pinchStartScale * (nextDistance / this.pinchStartDistance))
+      );
       this.setZoomAt(centerX, centerY, nextScale);
       this.updateViewportTransform();
       return;
@@ -878,7 +925,13 @@ export class MindmapView extends ItemView {
     if (this.pendingCanvasPanStart) {
       const distance = Math.hypot(first.clientX - this.pendingCanvasPanStart.x, first.clientY - this.pendingCanvasPanStart.y);
       if (distance > 10) {
+        const shouldPreferNodeDrag = this.pendingCanvasPanStart.startedOnNode
+          && Date.now() - this.pendingCanvasPanStart.startedAt >= MindmapView.MOBILE_NODE_DRAG_LONG_PRESS_DELAY;
         this.clearMobileCanvasLongPressTimer();
+        if (shouldPreferNodeDrag) {
+          this.pendingCanvasPanStart = null;
+          return;
+        }
         this.touchPanStart = this.pendingCanvasPanStart;
         this.pendingCanvasPanStart = null;
       }
@@ -899,12 +952,13 @@ export class MindmapView extends ItemView {
       return;
     }
     const hadPendingCanvasTap = !!this.pendingCanvasPanStart;
+    const pendingCanvasStartedOnNode = this.pendingCanvasPanStart?.startedOnNode ?? false;
     const hadActivePan = !!this.touchPanStart;
     this.clearMobileCanvasLongPressTimer();
     if (this.mobileLongPressMarqueeActive) {
       this.finishSelectionMarquee();
       this.lastMobileCanvasTap = null;
-    } else if (this.isMobileLayout && event.changedTouches.length === 1 && !hadActivePan && hadPendingCanvasTap) {
+    } else if (this.isMobileLayout && event.changedTouches.length === 1 && !hadActivePan && hadPendingCanvasTap && !pendingCanvasStartedOnNode) {
       const touch = event.changedTouches.item(0);
       if (touch) {
         const centered = this.handleMobileCanvasDoubleTap(touch.clientX, touch.clientY);
@@ -1019,6 +1073,9 @@ export class MindmapView extends ItemView {
   }
 
   getDisplayText(): string {
+    if (!this.file && !this.doc) {
+      return "Mindmap";
+    }
     const mindmapTitle = this.doc?.root.title.trim();
     return mindmapTitle && mindmapTitle.length > 0
       ? mindmapTitle
@@ -1052,9 +1109,6 @@ export class MindmapView extends ItemView {
       window.addEventListener("touchend", this.onWindowTouchEnd, { passive: false, capture: true });
       window.addEventListener("touchcancel", this.onWindowTouchEnd, { passive: false, capture: true });
       window.addEventListener("wheel", this.onWindowWheel, { passive: false, capture: true });
-      window.addEventListener("resize", this.onWindowResize);
-      window.visualViewport?.addEventListener("resize", this.onMobileViewportResize);
-      window.visualViewport?.addEventListener("scroll", this.onMobileViewportScroll);
       document.addEventListener("touchstart", this.onWindowTouchStart, { passive: false, capture: true });
       document.addEventListener("touchmove", this.onWindowTouchMove, { passive: false, capture: true });
       document.addEventListener("touchend", this.onWindowTouchEnd, { passive: false, capture: true });
@@ -1078,27 +1132,51 @@ export class MindmapView extends ItemView {
     //   void this.reloadFromDisk(true);
     // });
     this.mobileActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-mobile-action-cluster" });
+    this.mobileActionClusterEl.addClass("is-hidden");
+    this.mobileNodeTooltipEl = this.containerEl.createDiv({ cls: "mindmap-mobile-node-tooltip is-hidden" });
+    this.mobileNodeTooltipEl.appendChild(this.mobileActionClusterEl);
+    this.mobileGlobalActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-mobile-global-action-cluster" });
     const mobileActionClusterEl = this.mobileActionClusterEl;
+    const mobileGlobalActionClusterEl = this.mobileGlobalActionClusterEl;
     // 增加“新增节点”按钮
-    this.mobileAddButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-add-button", text: "+" });
+    this.mobileAddButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-add-button", text: "子+" });
     this.mobileAddButtonEl.type = "button";
     this.mobileAddButtonEl.addEventListener("click", () => {
+      this.closeMobileNodeTooltip();
       const targetId = this.selectedNodeId ?? this.doc?.root.id;
       if (targetId) {
         this.createChildNode(targetId);
       }
     });
 
-    this.mobileUndoButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-undo-button", text: "撤回" });
+    this.mobileSiblingAddButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sibling-add-button", text: "同+" });
+    this.mobileSiblingAddButtonEl.type = "button";
+    this.mobileSiblingAddButtonEl.addEventListener("click", () => {
+      this.closeMobileNodeTooltip();
+      const targetId = this.selectedNodeId ?? this.doc?.root.id;
+      if (targetId) {
+        this.createSiblingNode(targetId);
+      }
+    });
+
+    this.mobileUndoButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-undo-button", text: "撤回" });
     this.mobileUndoButtonEl.type = "button";
     this.mobileUndoButtonEl.addEventListener("click", () => {
-      void this.undoLastAction();
+      this.closeMobileNodeTooltip();
+      void this.undo();
+    });
+    this.mobileRedoButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-redo-button", text: "重做" });
+    this.mobileRedoButtonEl.type = "button";
+    this.mobileRedoButtonEl.addEventListener("click", () => {
+      this.closeMobileNodeTooltip();
+      void this.redo();
     });
 
     // 增加“删除节点”按钮
     this.mobileDeleteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-delete-button", text: "-" });
     this.mobileDeleteButtonEl.type = "button";
     this.mobileDeleteButtonEl.addEventListener("click", () => {
+      this.closeMobileNodeTooltip();
       if (this.selectedNodeId && this.doc && this.selectedNodeId !== this.doc.root.id) {
         void this.deleteNodeById(this.selectedNodeId);
       }
@@ -1106,6 +1184,7 @@ export class MindmapView extends ItemView {
     this.mobileLinkButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-link-button", text: "跳转" });
     this.mobileLinkButtonEl.type = "button";
     this.mobileLinkButtonEl.addEventListener("click", () => {
+      this.closeMobileNodeTooltip();
       if (!this.doc || !this.selectedNodeId) {
         return;
       }
@@ -1129,19 +1208,16 @@ export class MindmapView extends ItemView {
     this.mobileNoteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-note-button", text: "笔记" });
     this.mobileNoteButtonEl.type = "button";
     this.mobileNoteButtonEl.addEventListener("click", () => {
+      this.closeMobileNodeTooltip();
       if (this.selectedNodeId) {
         void this.openDrawer(this.selectedNodeId);
       }
     });
-    this.mobileZenButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-zen-button", text: "锁住" });
+    this.mobileZenButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-zen-button", text: "锁住" });
     this.mobileZenButtonEl.type = "button";
     this.mobileZenButtonEl.addEventListener("click", () => {
       this.setZenMode(!this.isZenMode);
     });
-    if (this.isMobileLayout) {
-      this.setZenMode(true);
-    }
-    this.updateUndoButtonState();
     this.updateMobileActionButtons();
     this.drawerResizeHandleEl = this.layoutEl.createDiv({ cls: "mindmap-drawer-resize-handle" });
     this.drawerResizeHandleEl.addEventListener("pointerdown", (event) => this.startDrawerResize(event));
@@ -1206,7 +1282,6 @@ export class MindmapView extends ItemView {
       type: "text"
     });
     this.nodeLinkInputEl.placeholder = "输入链接目标：导图或笔记路径";
-    this.attachInputInteractionGuard(this.nodeLinkInputEl);
     this.nodeLinkActionButtonEl = nodeLinkActionsEl.createEl("button", {
       cls: "mindmap-node-link-action-button is-disabled",
       text: "跳转"
@@ -1232,13 +1307,11 @@ export class MindmapView extends ItemView {
       if (!node) {
         return;
       }
-      const nextLinkTarget = this.nodeLinkInputEl.value.trim();
-      if (nextLinkTarget === (node.linkTarget ?? "")) {
-        this.updateNodeLinkActionButton(node.linkTarget ?? "");
-        return;
+      if (!this.linkHistoryCapturedForSession) {
+        this.captureHistorySnapshot();
+        this.linkHistoryCapturedForSession = true;
       }
-      this.pushUndoSnapshot();
-      node.linkTarget = nextLinkTarget;
+      node.linkTarget = this.nodeLinkInputEl.value.trim();
       this.updateNodeLinkActionButton(node.linkTarget ?? "");
       this.requestSave();
       this.renderMindmap();
@@ -1247,7 +1320,6 @@ export class MindmapView extends ItemView {
     this.noteInputEl = this.noteSurfaceEl.createEl("textarea", {
       cls: "mindmap-note-input"
     });
-    this.attachInputInteractionGuard(this.noteInputEl);
     this.noteInputEl.placeholder = "使用 Markdown 记录节点笔记...";
     this.notePreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-preview markdown-preview-view" });
 
@@ -1265,6 +1337,10 @@ export class MindmapView extends ItemView {
       if (!node) {
         return;
       }
+      if (!this.noteHistoryCapturedForSession) {
+        this.captureHistorySnapshot();
+        this.noteHistoryCapturedForSession = true;
+      }
       node.note = this.noteInputEl.value;
       this.scheduleMarkdownRender(node.note ?? "");
       this.requestSave();
@@ -1273,7 +1349,6 @@ export class MindmapView extends ItemView {
       void this.handlePaste(event);
     });
     this.noteInputEl.addEventListener("keydown", (event) => {
-      this.suppressEditorKeyboardEvent(event);
       if (event.key === "Tab") {
         event.preventDefault();
         this.indentNoteSelection(event.shiftKey);
@@ -1284,10 +1359,6 @@ export class MindmapView extends ItemView {
         this.setNoteEditing(false);
       }
     });
-
-    if (this.isMobileLayout) {
-      this.initializeMobileKeyboardTracking();
-    }
 
     this.svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svgEl.classList.add("mindmap-svg");
@@ -1307,6 +1378,38 @@ export class MindmapView extends ItemView {
         return;
       }
       void this.reloadFromDisk(false);
+    }));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      if (!(file instanceof TFile) || !this.file) {
+        return;
+      }
+      if (oldPath !== this.file.path) {
+        return;
+      }
+      this.file = file;
+      if (this.doc) {
+        this.doc.selfPath = file.path;
+      }
+      this.refreshTabTitle();
+      void this.syncOpenDrawerWithSelection();
+      this.renderMindmap();
+    }));
+    this.registerEvent(this.app.vault.on("delete", (file) => {
+      if (!(file instanceof TFile) || !this.file || file.path !== this.file.path) {
+        return;
+      }
+      this.file = null;
+      this.doc = null;
+      this.closeDrawer();
+      this.selectedNodeId = null;
+      this.selectedNodeIds.clear();
+      this.editingNodeId = null;
+      this.mobileTooltipNodeId = null;
+      this.refreshTabTitle();
+      this.renderMindmap();
+      window.setTimeout(() => {
+        void this.leaf.setViewState({ type: "empty" });
+      }, 0);
     }));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
       this.unlockMobileZenWhenViewportChanges();
@@ -1331,9 +1434,6 @@ export class MindmapView extends ItemView {
       window.removeEventListener("touchend", this.onWindowTouchEnd, true);
       window.removeEventListener("touchcancel", this.onWindowTouchEnd, true);
       window.removeEventListener("wheel", this.onWindowWheel, true);
-      window.removeEventListener("resize", this.onWindowResize);
-      window.visualViewport?.removeEventListener("resize", this.onMobileViewportResize);
-      window.visualViewport?.removeEventListener("scroll", this.onMobileViewportScroll);
       document.removeEventListener("touchstart", this.onWindowTouchStart, true);
       document.removeEventListener("touchmove", this.onWindowTouchMove, true);
       document.removeEventListener("touchend", this.onWindowTouchEnd, true);
@@ -1405,7 +1505,9 @@ export class MindmapView extends ItemView {
       const raw = await this.app.vault.cachedRead(this.file);
       this.doc = normalizeMindmapDocument(JSON.parse(raw) as MindmapDocument);
       this.undoStack = [];
-      this.updateUndoButtonState();
+      this.redoStack = [];
+      this.noteHistoryCapturedForSession = false;
+      this.linkHistoryCapturedForSession = false;
       this.normalizeLayout();
       this.refreshTabTitle();
       if (!this.doc.selfPath && this.file) {
@@ -1461,7 +1563,6 @@ export class MindmapView extends ItemView {
       return;
     }
     this.graphLayerEl.innerHTML = "";
-    this.autoHeightCache.clear();
     this.updateMobileActionButtons();
     if (!this.doc) {
       return;
@@ -1490,30 +1591,30 @@ export class MindmapView extends ItemView {
           ? new Set(this.collectSubtreeNodes(draggingRoot).map((current) => current.id))
           : null;
       })();
+    const dragGhostPositions = this.dragGhostPositions;
 
     this.updateMarqueeOverlay();
-
-    const edgeFragment = document.createDocumentFragment();
-    const nodeFragment = document.createDocumentFragment();
 
     const drawOrthogonalConnectors = (node: MindmapNode): void => {
       if (node.collapsed || node.children.length === 0) {
         return;
       }
       const fromSize = this.ensureNodeSize(node);
-      const parentX = node.x + fromSize.width / 2;
+      const parentPosition = draggingIds?.has(node.id) ? dragGhostPositions.get(node.id) ?? node : node;
+      const parentX = parentPosition.x + fromSize.width / 2;
 
       if (node.children.length === 1) {
         const child = node.children[0];
         const childSize = this.ensureNodeSize(child);
-        const childX = child.x - childSize.width / 2;
+        const childPosition = draggingIds?.has(child.id) ? dragGhostPositions.get(child.id) ?? child : child;
+        const childX = childPosition.x - childSize.width / 2;
         const directPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-        directPath.setAttribute("d", `M ${parentX} ${node.y} H ${childX}`);
+        directPath.setAttribute("d", `M ${parentX} ${parentPosition.y} H ${childX}`);
         directPath.classList.add("mindmap-edge");
         if (draggingIds?.has(node.id) || draggingIds?.has(child.id)) {
           directPath.classList.add("is-dragging");
         }
-        edgeFragment.appendChild(directPath);
+        this.graphLayerEl.appendChild(directPath);
         drawOrthogonalConnectors(child);
         return;
       }
@@ -1521,18 +1622,19 @@ export class MindmapView extends ItemView {
       const branchX = parentX + 28;
       const childAnchors = node.children.map((child) => {
         const childSize = this.ensureNodeSize(child);
+        const childPosition = draggingIds?.has(child.id) ? dragGhostPositions.get(child.id) ?? child : child;
         return {
           child,
-          x: child.x - childSize.width / 2,
-          y: child.y
+          x: childPosition.x - childSize.width / 2,
+          y: childPosition.y
         };
       });
 
       const topY = childAnchors[0]?.y;
       const bottomY = childAnchors[childAnchors.length - 1]?.y;
       if (topY !== undefined && bottomY !== undefined) {
-        const trunkStartY = Math.min(node.y, topY, bottomY);
-        const trunkEndY = Math.max(node.y, topY, bottomY);
+        const trunkStartY = Math.min(parentPosition.y, topY, bottomY);
+        const trunkEndY = Math.max(parentPosition.y, topY, bottomY);
         if (Math.abs(trunkEndY - trunkStartY) > 2) {
           const trunk = document.createElementNS("http://www.w3.org/2000/svg", "path");
           trunk.setAttribute("d", `M ${branchX} ${trunkStartY} V ${trunkEndY}`);
@@ -1540,17 +1642,17 @@ export class MindmapView extends ItemView {
           if (draggingIds?.has(node.id) || node.children.some((child) => draggingIds?.has(child.id))) {
             trunk.classList.add("is-dragging");
           }
-          edgeFragment.appendChild(trunk);
+          this.graphLayerEl.appendChild(trunk);
         }
       }
 
       const parentPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      parentPath.setAttribute("d", `M ${parentX} ${node.y} H ${branchX}`);
+      parentPath.setAttribute("d", `M ${parentX} ${parentPosition.y} H ${branchX}`);
       parentPath.classList.add("mindmap-edge");
       if (draggingIds?.has(node.id) || node.children.some((child) => draggingIds?.has(child.id))) {
         parentPath.classList.add("is-dragging");
       }
-      edgeFragment.appendChild(parentPath);
+      this.graphLayerEl.appendChild(parentPath);
 
       childAnchors.forEach(({ child, x, y }) => {
         const childPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -1559,13 +1661,50 @@ export class MindmapView extends ItemView {
         if (draggingIds?.has(node.id) || draggingIds?.has(child.id)) {
           childPath.classList.add("is-dragging");
         }
-        edgeFragment.appendChild(childPath);
+        this.graphLayerEl.appendChild(childPath);
         drawOrthogonalConnectors(child);
       });
     };
 
     drawOrthogonalConnectors(this.doc.root);
-    this.graphLayerEl.appendChild(edgeFragment);
+
+    if (draggingIds && dragGhostPositions.size > 0) {
+      nodes
+        .filter((node) => draggingIds.has(node.id))
+        .forEach((node) => {
+          const ghostPosition = dragGhostPositions.get(node.id);
+          if (!ghostPosition) {
+            return;
+          }
+          const size = this.ensureNodeSize(node);
+          const ghostGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+          ghostGroup.classList.add("mindmap-node-group", "is-drag-ghost");
+          ghostGroup.setAttribute("transform", `translate(${ghostPosition.x}, ${ghostPosition.y})`);
+
+          const ghostRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+          ghostRect.setAttribute("x", String(-size.width / 2));
+          ghostRect.setAttribute("y", String(-size.height / 2));
+          ghostRect.setAttribute("rx", node.id === this.doc?.root.id ? "16" : "10");
+          ghostRect.setAttribute("ry", node.id === this.doc?.root.id ? "16" : "10");
+          ghostRect.setAttribute("width", String(size.width));
+          ghostRect.setAttribute("height", String(size.height));
+          ghostRect.classList.add("mindmap-node", "is-drag-ghost");
+          ghostGroup.appendChild(ghostRect);
+
+          const ghostTitle = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
+          ghostTitle.setAttribute("x", String(-size.width / 2 + 10));
+          ghostTitle.setAttribute("y", String(-size.height / 2 + 6));
+          ghostTitle.setAttribute("width", String(size.width - 20));
+          ghostTitle.setAttribute("height", String(size.height - 12));
+          const ghostText = document.createElement("div");
+          ghostText.className = "mindmap-node-title is-drag-ghost";
+          ghostText.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+          ghostText.textContent = node.title;
+          ghostTitle.appendChild(ghostText);
+          ghostGroup.appendChild(ghostTitle);
+          this.graphLayerEl.appendChild(ghostGroup);
+        });
+    }
 
     const nodesToRender = draggingIds
       ? [
@@ -1600,7 +1739,8 @@ export class MindmapView extends ItemView {
       if (this.dropTargetNodeId === node.id) {
         rect.classList.add("is-drop-target");
       }
-      if (this.selectedNodeId === node.id || this.selectedNodeIds.has(node.id)) {
+      const isNodeSelected = this.selectedNodeId === node.id || this.selectedNodeIds.has(node.id);
+      if (isNodeSelected) {
         rect.classList.add("is-selected");
       }
       group.appendChild(rect);
@@ -1663,7 +1803,7 @@ export class MindmapView extends ItemView {
         foldGroup.addEventListener("click", (event) => {
           event.stopPropagation();
           event.preventDefault();
-          this.pushUndoSnapshot();
+          this.captureHistorySnapshot();
           node.collapsed = !node.collapsed;
           this.normalizeLayout();
           this.requestSave();
@@ -1676,20 +1816,22 @@ export class MindmapView extends ItemView {
         group.appendChild(foldGroup);
       }
 
-      const resizeHandle = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      resizeHandle.setAttribute("x", String(size.width / 2 - 9));
-      resizeHandle.setAttribute("y", String(size.height / 2 - 9));
-      resizeHandle.setAttribute("width", "10");
-      resizeHandle.setAttribute("height", "10");
-      resizeHandle.setAttribute("rx", "5");
-      resizeHandle.setAttribute("ry", "5");
-      resizeHandle.classList.add("mindmap-resize-handle");
-      resizeHandle.addEventListener("pointerdown", (event) => {
-        event.stopPropagation();
-        event.preventDefault();
-        this.startResize(event, node);
-      });
-      group.appendChild(resizeHandle);
+      if (isNodeSelected) {
+        const resizeHandle = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        resizeHandle.setAttribute("x", String(size.width / 2 - 9));
+        resizeHandle.setAttribute("y", String(size.height / 2 - 9));
+        resizeHandle.setAttribute("width", "10");
+        resizeHandle.setAttribute("height", "10");
+        resizeHandle.setAttribute("rx", "5");
+        resizeHandle.setAttribute("ry", "5");
+        resizeHandle.classList.add("mindmap-resize-handle");
+        resizeHandle.addEventListener("pointerdown", (event) => {
+          event.stopPropagation();
+          event.preventDefault();
+          this.startResize(event, node);
+        });
+        group.appendChild(resizeHandle);
+      }
 
       group.addEventListener("pointerdown", (event) => {
         this.startDrag(event, node);
@@ -1745,10 +1887,8 @@ export class MindmapView extends ItemView {
         this.renderMindmap();
         this.openNodeMenu(event, node.id);
       });
-      nodeFragment.appendChild(group);
+      this.graphLayerEl.appendChild(group);
     });
-
-    this.graphLayerEl.appendChild(nodeFragment);
   }
 
   private startDrag(event: PointerEvent, node: MindmapNode): void {
@@ -1767,6 +1907,7 @@ export class MindmapView extends ItemView {
     }
 
     const selectedRoots = this.getDragRootNodes(node);
+    const snapshotBeforeDrag = this.cloneDocument(this.doc);
     const draggingNodes = this.collectMultipleSubtreeNodes(selectedRoots);
     const draggingNodeIds = new Set(draggingNodes.map((current) => current.id));
     const selectedRootIds = new Set(selectedRoots.map((current) => current.id));
@@ -1778,21 +1919,49 @@ export class MindmapView extends ItemView {
     let siblingSortActive = false;
     const startClient = { x: event.clientX, y: event.clientY };
     const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
+    const isTouchDragCandidate = this.isMobileLayout && event.pointerType !== "mouse";
     let dragStarted = false;
-    let hasRecordedUndoSnapshot = false;
+    let dragArmed = !isTouchDragCandidate;
+    let longPressTimer: number | null = null;
+    let longPressHapticFired = false;
+
+    if (isTouchDragCandidate) {
+      longPressTimer = window.setTimeout(() => {
+        dragArmed = true;
+        if (!longPressHapticFired) {
+          navigator.vibrate?.(12);
+          longPressHapticFired = true;
+        }
+      }, MindmapView.MOBILE_NODE_DRAG_LONG_PRESS_DELAY);
+    }
 
     const onMove = (moveEvent: PointerEvent): void => {
       const distance = Math.hypot(moveEvent.clientX - startClient.x, moveEvent.clientY - startClient.y);
       if (!dragStarted) {
+        if (isTouchDragCandidate && distance >= 6 && !dragArmed) {
+          if (longPressTimer !== null) {
+            window.clearTimeout(longPressTimer);
+            longPressTimer = null;
+          }
+          dragArmed = false;
+          return;
+        }
         if (distance < 4) {
           return;
         }
+        if (!dragArmed) {
+          return;
+        }
         dragStarted = true;
-        if (!hasRecordedUndoSnapshot) {
-          this.pushUndoSnapshot();
-          hasRecordedUndoSnapshot = true;
+        if (longPressTimer !== null) {
+          window.clearTimeout(longPressTimer);
+          longPressTimer = null;
         }
         this.isDragging = true;
+        this.dragGhostPositions = new Map();
+        draggingNodes.forEach((current) => {
+          this.dragGhostPositions.set(current.id, { x: current.x, y: current.y });
+        });
         this.draggingNodeIds = draggingNodeIds;
         this.selectedNodeId = selectedRootIds.has(node.id) ? node.id : selectedRoots[0]?.id ?? node.id;
         this.selectedNodeIds = new Set(selectedRootIds);
@@ -1862,6 +2031,10 @@ export class MindmapView extends ItemView {
     const onUp = (upEvent: PointerEvent): void => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      if (longPressTimer !== null) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
       if (!dragStarted) {
         if (
           this.isMobileLayout &&
@@ -1870,13 +2043,18 @@ export class MindmapView extends ItemView {
         ) {
           const now = Date.now();
           if (this.lastMobileNodeTap && this.lastMobileNodeTap.nodeId === node.id && now - this.lastMobileNodeTap.time <= 320) {
+            this.closeMobileNodeTooltip();
             this.lastMobileNodeTap = null;
             this.setSingleSelectedNode(node.id);
             this.startInlineNodeEdit(node.id);
           } else {
+            const shouldOpenTooltip = this.shouldOpenMobileNodeTooltip(node.id, now);
             this.lastMobileNodeTap = { nodeId: node.id, time: now };
             this.setSingleSelectedNode(node.id);
             this.focusContainerWithoutScroll();
+            if (shouldOpenTooltip) {
+              this.openMobileNodeTooltip(node.id);
+            }
             this.renderMindmap();
           }
         } else {
@@ -1886,11 +2064,13 @@ export class MindmapView extends ItemView {
       }
       this.isDragging = false;
       this.draggingNodeIds = new Set();
+      this.dragGhostPositions = new Map();
       const dropTarget = this.findDropTargetForIds(selectedRootIds);
       this.dropTargetNodeId = null;
       if (dropTarget && this.doc) {
         const moved = this.reparentMultipleNodes(selectedRoots, dropTarget.id);
         if (moved) {
+          this.pushHistoryState(snapshotBeforeDrag);
           this.selectedNodeIds = new Set(selectedRoots.map((current) => current.id));
           this.selectedNodeId = selectedRoots[0]?.id ?? null;
           this.normalizeLayout();
@@ -1900,6 +2080,7 @@ export class MindmapView extends ItemView {
           return;
         }
       }
+      this.pushHistoryState(snapshotBeforeDrag);
       this.normalizeLayout();
       this.requestSave();
       void this.syncOpenDrawerWithSelection();
@@ -2101,6 +2282,61 @@ export class MindmapView extends ItemView {
     }
   }
 
+  private sanitizeMindmapFileBaseName(title: string): string {
+    const sanitized = title
+      .replace(/[\\/:*?"<>|]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return sanitized || "未命名导图";
+  }
+
+  private async renameMindmapFileToMatchRootTitle(nextTitle: string): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+    const parentPath = this.file.parent?.path ?? "";
+    const extension = this.file.extension;
+    const nextBaseName = this.sanitizeMindmapFileBaseName(nextTitle);
+    const buildFileName = (suffix?: number): string => {
+      const resolvedBaseName = suffix && suffix > 1 ? `${nextBaseName} ${suffix}` : nextBaseName;
+      return extension ? `${resolvedBaseName}.${extension}` : resolvedBaseName;
+    };
+
+    let candidatePath = "";
+    let candidateFileName = "";
+    let suffix = 1;
+    while (true) {
+      candidateFileName = buildFileName(suffix);
+      candidatePath = normalizePath(parentPath ? `${parentPath}/${candidateFileName}` : candidateFileName);
+      if (candidatePath === this.file.path) {
+        return;
+      }
+      const existing = this.app.vault.getAbstractFileByPath(candidatePath);
+      if (!existing || existing === this.file) {
+        break;
+      }
+      suffix += 1;
+    }
+
+    if (this.file.name === candidateFileName) {
+      return;
+    }
+
+    try {
+      await this.app.fileManager.renameFile(this.file, candidatePath);
+      const renamed = this.app.vault.getAbstractFileByPath(candidatePath);
+      if (renamed instanceof TFile) {
+        this.file = renamed;
+      }
+      if (this.doc) {
+        this.doc.selfPath = candidatePath;
+      }
+      this.refreshTabTitle();
+    } catch (error) {
+      new Notice(`导图文件重命名失败：${String(error)}`);
+    }
+  }
+
   private async syncDrawerToNode(nodeId: string): Promise<void> {
     if (!this.doc) {
       return;
@@ -2169,12 +2405,18 @@ export class MindmapView extends ItemView {
     const selectedNode = this.doc && this.selectedNodeId ? findNodeById(this.doc, this.selectedNodeId) : null;
     const canDelete = !!selectedNode && this.doc?.root.id !== selectedNode.id;
     const hasLink = !!selectedNode?.linkTarget?.trim();
+    const canUndo = this.undoStack.length > 0;
+    const canRedo = this.redoStack.length > 0;
 
     this.mobileDeleteButtonEl?.toggleClass("is-hidden", !canDelete);
     this.mobileDeleteButtonEl?.toggleAttribute("hidden", !canDelete);
     this.mobileLinkButtonEl?.toggleClass("is-hidden", !hasLink);
     this.mobileLinkButtonEl?.toggleAttribute("hidden", !hasLink);
-    this.updateUndoButtonState();
+    this.mobileUndoButtonEl?.toggleClass("is-disabled", !canUndo);
+    this.mobileUndoButtonEl?.setAttribute("aria-disabled", canUndo ? "false" : "true");
+    this.mobileUndoButtonEl?.setAttribute("data-undo-count", canUndo ? String(this.undoStack.length) : "");
+    this.mobileRedoButtonEl?.toggleClass("is-disabled", !canRedo);
+    this.mobileRedoButtonEl?.setAttribute("aria-disabled", canRedo ? "false" : "true");
   }
 
   private async renderMarkdown(markdown: string): Promise<void> {
@@ -2520,8 +2762,8 @@ export class MindmapView extends ItemView {
     if (!parent) {
       return;
     }
-    this.pushUndoSnapshot();
     const anchorNodeId = parent.id;
+    this.captureHistorySnapshot();
     const child = addChildNode(this.doc, parentId, {
       x: parent.x + 180,
       y: parent.y + (parent.children.length + 1) * 56
@@ -2529,6 +2771,7 @@ export class MindmapView extends ItemView {
     if (!child) {
       return;
     }
+    this.captureHistorySnapshot();
     this.setSingleSelectedNode(child.id);
     this.editingNodeId = child.id;
     this.playNodeActionSound("add");
@@ -2546,9 +2789,9 @@ export class MindmapView extends ItemView {
       this.createChildNode(nodeId);
       return;
     }
-    this.pushUndoSnapshot();
     const anchorNodeId = nodeId;
     const insertIndex = parentLookup.index + 1;
+    this.captureHistorySnapshot();
     const sibling = {
       id: crypto.randomUUID(),
       title: `新节点 ${parentLookup.parent.children.length + 1}`,
@@ -2584,7 +2827,7 @@ export class MindmapView extends ItemView {
     if (!accepted) {
       return;
     }
-    this.pushUndoSnapshot();
+    this.captureHistorySnapshot();
     const result = removeNode(this.doc, nodeId);
     if (!result) {
       new Notice("删除失败：未找到节点");
@@ -2670,6 +2913,11 @@ export class MindmapView extends ItemView {
     //     });
     // });
     menu.showAtMouseEvent(event);
+    window.requestAnimationFrame(() => {
+      document.body.querySelectorAll(".menu").forEach((menuEl) => {
+        menuEl.addClass("mindmap-node-menu");
+      });
+    });
   }
 
   private clearNodeLink(nodeId: string): void {
@@ -2711,7 +2959,10 @@ export class MindmapView extends ItemView {
     const rect = this.svgEl.getBoundingClientRect();
     const beforeX = (clientX - rect.left - this.panOffset.x) / this.zoomScale;
     const beforeY = (clientY - rect.top - this.panOffset.y) / this.zoomScale;
-    const nextScale = Math.min(3.6, Math.max(0.25, this.zoomScale * (1 + zoomDelta)));
+    const nextScale = Math.min(
+      MindmapView.MAX_ZOOM_SCALE,
+      Math.max(MindmapView.MIN_ZOOM_SCALE, this.zoomScale * (1 + zoomDelta))
+    );
     this.applyZoomFromPoint(clientX, clientY, beforeX, beforeY, nextScale);
   }
 
@@ -2804,9 +3055,9 @@ export class MindmapView extends ItemView {
       maxVisibleWidth = Math.max(maxVisibleWidth, size.width);
     });
 
-    const horizontalPadding = this.isMobileLayout ? 20 : 56;
-    const targetVisibleWidth = Math.max(rootSize.width * 3.6, maxVisibleWidth * 1.75);
-    const fitScale = Math.min(1, Math.max(0.38, (viewportWidth - horizontalPadding * 2) / targetVisibleWidth));
+    const horizontalPadding = this.isMobileLayout ? 32 : 80;
+    const targetVisibleWidth = Math.max(rootSize.width * 2.8, maxVisibleWidth * 1.35);
+    const fitScale = Math.min(1.15, Math.max(0.55, (viewportWidth - horizontalPadding * 2) / targetVisibleWidth));
 
     this.zoomScale = fitScale;
     this.panOffset.x = viewportWidth / 2 - root.x * this.zoomScale;
@@ -2839,10 +3090,13 @@ export class MindmapView extends ItemView {
 
     const contentWidth = Math.max(1, maxX - minX);
     const contentHeight = Math.max(1, maxY - minY);
-    const padding = this.isMobileLayout ? 16 : 40;
+    const padding = this.isMobileLayout ? 28 : 56;
     const availableWidth = Math.max(1, viewportWidth - padding * 2);
     const availableHeight = Math.max(1, viewportHeight - padding * 2);
-    const fitScale = Math.min(1.05, Math.max(0.32, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)));
+    const fitScale = Math.min(
+      MindmapView.MAX_ZOOM_SCALE,
+      Math.max(MindmapView.MIN_ZOOM_SCALE, Math.min(availableWidth / contentWidth, availableHeight / contentHeight))
+    );
 
     this.zoomScale = fitScale;
     const contentCenterX = (minX + maxX) / 2;
@@ -3050,8 +3304,9 @@ export class MindmapView extends ItemView {
   private closeDrawer(): void {
     this.drawerEl.addClass("is-hidden");
     this.layoutEl.removeClass("has-drawer");
+    this.noteHistoryCapturedForSession = false;
+    this.linkHistoryCapturedForSession = false;
     this.setNoteEditing(false);
-    this.updateMobileKeyboardVisibility();
   }
 
   private clearCanvasSelection(): void {
@@ -3061,6 +3316,7 @@ export class MindmapView extends ItemView {
     this.selectedNodeId = null;
     this.selectedNodeIds.clear();
     this.editingNodeId = null;
+    this.closeMobileNodeTooltip();
     this.updateMobileActionClusterVisibility();
     this.renderMindmap();
   }
@@ -3069,8 +3325,11 @@ export class MindmapView extends ItemView {
     if (!this.isMobileLayout || !this.mobileActionClusterEl) {
       return;
     }
-    const hidden = this.editingNodeId !== null || this.isMobileKeyboardVisible;
+    const noteInputFocused = document.activeElement === this.noteInputEl;
+    const hidden = this.editingNodeId !== null || noteInputFocused;
     this.mobileActionClusterEl.toggleClass("is-editing-hidden", hidden);
+    this.mobileNodeTooltipEl?.toggleClass("is-editing-hidden", hidden);
+    this.mobileGlobalActionClusterEl?.toggleClass("is-editing-hidden", hidden);
   }
 
   private setMobileActionClusterEditingHidden(hidden: boolean): void {
@@ -3078,6 +3337,7 @@ export class MindmapView extends ItemView {
       return;
     }
     this.mobileActionClusterEl.toggleClass("is-editing-hidden", hidden);
+    this.mobileGlobalActionClusterEl?.toggleClass("is-editing-hidden", hidden);
   }
 
   private setSingleSelectedNode(nodeId: string | null): void {
@@ -3086,7 +3346,9 @@ export class MindmapView extends ItemView {
     if (nodeId !== this.editingNodeId) {
       this.editingNodeId = null;
     }
-    this.updateMobileKeyboardVisibility();
+    if (nodeId !== this.mobileTooltipNodeId) {
+      this.closeMobileNodeTooltip();
+    }
     this.updateMobileActionClusterVisibility();
     void this.syncOpenDrawerWithSelection();
   }
@@ -3099,7 +3361,6 @@ export class MindmapView extends ItemView {
     this.selectedNodeId = nodeId;
     this.selectedNodeIds = new Set([nodeId]);
     this.editingNodeId = nodeId;
-    this.updateMobileKeyboardVisibility();
     this.updateMobileActionClusterVisibility();
     this.renderMindmap();
   }
@@ -3124,30 +3385,34 @@ export class MindmapView extends ItemView {
     input.className = "mindmap-node-inline-input";
     input.value = node.title;
     input.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
-    this.attachInputInteractionGuard(input);
     input.addEventListener("pointerdown", (event) => event.stopPropagation());
     input.addEventListener("click", (event) => event.stopPropagation());
 
     const commit = (): void => {
-      if (!this.doc) {
+      void (async () => {
+        if (!this.doc) {
+          this.editingNodeId = null;
+          this.updateMobileActionClusterVisibility();
+          this.renderMindmap();
+          return;
+        }
+        const nextValue = input.value.trim();
+        if (nextValue && nextValue !== node.title) {
+          this.captureHistorySnapshot();
+          node.title = nextValue;
+          if (node.id === this.doc.root.id) {
+            await this.renameMindmapFileToMatchRootTitle(nextValue);
+          }
+        }
+        if (node.id === this.doc.root.id) {
+          this.refreshTabTitle();
+        }
         this.editingNodeId = null;
-        this.updateMobileActionClusterVisibility();
+        this.setSingleSelectedNode(node.id);
+        this.normalizeLayoutKeepingNodePosition(node.id);
+        this.requestSave();
         this.renderMindmap();
-        return;
-      }
-      const nextValue = input.value.trim();
-      if (nextValue && nextValue !== node.title) {
-        this.pushUndoSnapshot();
-        node.title = nextValue;
-      }
-      if (node.id === this.doc.root.id) {
-        this.refreshTabTitle();
-      }
-      this.editingNodeId = null;
-      this.setSingleSelectedNode(node.id);
-      this.normalizeLayoutKeepingNodePosition(node.id);
-      this.requestSave();
-      this.renderMindmap();
+      })();
     };
 
     const cancel = (): void => {
@@ -3157,7 +3422,6 @@ export class MindmapView extends ItemView {
     };
 
     input.addEventListener("keydown", (event) => {
-      this.suppressEditorKeyboardEvent(event);
       if (event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
@@ -3167,11 +3431,6 @@ export class MindmapView extends ItemView {
       if (event.key === "Escape") {
         event.preventDefault();
         cancel();
-        return;
-      }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        commit();
       }
     });
     input.addEventListener("blur", () => {
@@ -3195,19 +3454,17 @@ export class MindmapView extends ItemView {
     const size = this.ensureNodeSize(node);
     const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
     const startSize = { width: size.width, height: size.height };
-    let hasRecordedUndoSnapshot = false;
+    const snapshotBeforeResize = this.cloneDocument(this.doc);
+    let didResize = false;
 
     const onMove = (moveEvent: PointerEvent): void => {
       const point = this.getDocumentPoint(moveEvent.clientX, moveEvent.clientY);
       const deltaX = point.x - startPoint.x;
       const deltaY = point.y - startPoint.y;
-      if (!hasRecordedUndoSnapshot && (Math.abs(deltaX) > 0.5 || Math.abs(deltaY) > 0.5)) {
-        this.pushUndoSnapshot();
-        hasRecordedUndoSnapshot = true;
-      }
       node.width = Math.max(MindmapView.MIN_NODE_WIDTH, startSize.width + deltaX);
       node.height = Math.max(MindmapView.MIN_NODE_HEIGHT, startSize.height + deltaY);
       node.manualSize = true;
+      didResize = didResize || node.width !== startSize.width || node.height !== startSize.height;
       this.normalizeLayoutKeepingNodePosition(node.id);
       this.renderMindmap();
     };
@@ -3215,6 +3472,9 @@ export class MindmapView extends ItemView {
     const onUp = (): void => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      if (didResize) {
+        this.pushHistoryState(snapshotBeforeResize);
+      }
       this.requestSave();
       this.renderMindmap();
     };
@@ -3245,11 +3505,6 @@ export class MindmapView extends ItemView {
 
   private measureAutoHeight(title: string, width: number): number {
     const content = title.trim() || " ";
-    const cacheKey = `${width}::${content}`;
-    const cachedHeight = this.autoHeightCache.get(cacheKey);
-    if (cachedHeight !== undefined) {
-      return cachedHeight;
-    }
     const ctx = this.textMeasureCanvas.getContext("2d");
     if (!ctx) {
       return MindmapView.DEFAULT_NODE_HEIGHT;
@@ -3276,8 +3531,6 @@ export class MindmapView extends ItemView {
 
     const lineHeight = 15 * 1.45;
     const verticalPadding = 20;
-    const height = Math.max(MindmapView.DEFAULT_NODE_HEIGHT, Math.ceil(totalLines * lineHeight + verticalPadding));
-    this.autoHeightCache.set(cacheKey, height);
-    return height;
+    return Math.max(MindmapView.DEFAULT_NODE_HEIGHT, Math.ceil(totalLines * lineHeight + verticalPadding));
   }
 }

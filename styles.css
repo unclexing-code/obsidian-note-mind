@@ -118,8 +118,51 @@
    transform: scale(0.98);
  }
 
+ .menu.mindmap-node-menu {
+   padding: 8px;
+   border-radius: 16px;
+   border: 1px solid rgba(180, 225, 255, 0.2);
+   background: linear-gradient(180deg, rgba(27, 42, 51, 0.98), rgba(21, 32, 39, 0.98));
+   box-shadow: 0 18px 36px rgba(3, 10, 14, 0.34), 0 0 0 1px rgba(143, 208, 255, 0.08);
+   backdrop-filter: blur(14px);
+ }
+
+ .menu.mindmap-node-menu .menu-item {
+   min-height: 38px;
+   border-radius: 12px;
+   margin: 2px 0;
+   padding: 0 10px;
+   transition: background-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+ }
+
+ .menu.mindmap-node-menu .menu-item:hover,
+ .menu.mindmap-node-menu .menu-item.is-selected {
+   background: rgba(143, 208, 255, 0.16);
+   box-shadow: inset 0 0 0 1px rgba(143, 208, 255, 0.16);
+   transform: translateX(1px);
+ }
+
+ .menu.mindmap-node-menu .menu-item-title {
+   color: #f4fbff;
+   font-size: 13px;
+   font-weight: 700;
+ }
+
+ .menu.mindmap-node-menu .menu-item-icon {
+   color: #9edcff;
+ }
+
+ .mindmap-mobile-action-cluster,
+ .mindmap-mobile-node-tooltip,
+ .mindmap-mobile-global-action-cluster,
+ .mindmap-mobile-undo-bubble {
+   display: none;
+ }
+
  .mindmap-mobile-add-button,
+ .mindmap-mobile-sibling-add-button,
  .mindmap-mobile-undo-button,
+ .mindmap-mobile-redo-button,
  .mindmap-mobile-delete-button,
  .mindmap-mobile-note-button,
  .mindmap-mobile-folder-button,
@@ -132,42 +175,111 @@
 
  .mindmap-root-view.is-mobile .mindmap-mobile-action-cluster {
    display: flex;
-   position: absolute;
-   left: 50%;
-   right: auto;
-   bottom: max(72px, calc(env(safe-area-inset-bottom, 0px) + 68px));
-   transform: translateX(-50%);
+   position: static;
+   transform: none;
    flex-direction: row;
    align-items: center;
    justify-content: center;
    flex-wrap: nowrap;
    gap: 10px;
-   padding: 8px 12px;
-   max-width: calc(100% - 24px);
+   padding: 0;
+   max-width: min(calc(100vw - 40px), 280px);
    overflow-x: auto;
    overflow-y: hidden;
    border-radius: 999px;
-   border: 1px solid rgba(255, 255, 255, 0.08);
-   background: #18252d;
-   box-shadow: 0 12px 24px rgba(7, 15, 20, 0.22);
+   border: none;
+   background: transparent;
+   box-shadow: none;
    z-index: 20;
    pointer-events: auto;
    -webkit-overflow-scrolling: touch;
    scrollbar-width: none;
  }
 
+ .mindmap-root-view.is-mobile .mindmap-mobile-action-cluster.is-hidden {
+   display: none;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-node-tooltip {
+   position: absolute;
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   transform: translate(-50%, -100%);
+   padding: 10px 12px;
+   border-radius: 999px;
+   border: 1px solid rgba(255, 255, 255, 0.08);
+   background: rgba(24, 37, 45, 0.96);
+   box-shadow: 0 14px 28px rgba(7, 15, 20, 0.26);
+   z-index: 22;
+   pointer-events: auto;
+   max-width: calc(100vw - 24px);
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-node-tooltip.is-below {
+   transform: translate(-50%, 0);
+ }
+
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-node-tooltip.is-hidden {
+   display: none;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-node-tooltip::after {
+   content: "";
+   position: absolute;
+   left: var(--mindmap-tooltip-arrow-left, 50%);
+   bottom: -6px;
+   width: 12px;
+   height: 12px;
+   transform: translateX(-50%) rotate(45deg);
+   background: rgba(24, 37, 45, 0.96);
+   border-right: 1px solid rgba(255, 255, 255, 0.08);
+   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-node-tooltip.is-below::after {
+   top: -6px;
+   bottom: auto;
+   border-right: none;
+   border-bottom: none;
+   border-left: 1px solid rgba(255, 255, 255, 0.08);
+   border-top: 1px solid rgba(255, 255, 255, 0.08);
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-global-action-cluster {
+   display: flex;
+   position: absolute;
+   top: max(12px, calc(env(safe-area-inset-top, 0px) + 8px));
+   right: max(12px, calc(env(safe-area-inset-right, 0px) + 8px));
+   flex-direction: row;
+   align-items: center;
+   justify-content: center;
+   gap: 10px;
+   padding: 8px 10px;
+   border-radius: 999px;
+   border: 1px solid rgba(255, 255, 255, 0.08);
+   background: rgba(24, 37, 45, 0.94);
+   box-shadow: 0 12px 24px rgba(7, 15, 20, 0.22);
+   z-index: 23;
+   pointer-events: auto;
+ }
+
  .mindmap-root-view.is-mobile .mindmap-mobile-action-cluster::-webkit-scrollbar {
    display: none;
  }
 
- .mindmap-root-view.is-mobile .mindmap-mobile-action-cluster.is-editing-hidden {
+ .mindmap-root-view.is-mobile .mindmap-mobile-action-cluster.is-editing-hidden,
+ .mindmap-root-view.is-mobile .mindmap-mobile-global-action-cluster.is-editing-hidden,
+ .mindmap-root-view.is-mobile .mindmap-mobile-node-tooltip.is-editing-hidden {
    opacity: 0;
    pointer-events: none;
-   transform: translateX(-50%) translateY(16px);
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sibling-add-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-undo-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-redo-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-sync-button,
@@ -176,10 +288,9 @@
  .mindmap-root-view.is-mobile .mindmap-mobile-link-button {
    display: inline-flex;
    position: static;
-   width: 40px;
    min-width: 40px;
    height: 40px;
-   padding: 0;
+   padding: 0 10px;
    border: 1px solid var(--mindmap-mobile-control-border);
    border-radius: 999px;
    background: var(--mindmap-mobile-control-bg);
@@ -193,17 +304,17 @@
    -webkit-tap-highlight-color: transparent;
  }
 
- .mindmap-root-view.is-mobile .mindmap-mobile-add-button {
-   font-size: 22px;
-   line-height: 1;
- }
-
+ .mindmap-root-view.is-mobile .mindmap-mobile-add-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sibling-add-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button {
-   font-size: 22px;
+   font-size: 13px;
    line-height: 1;
  }
 
+ .mindmap-mobile-add-button,
+ .mindmap-mobile-sibling-add-button,
  .mindmap-mobile-undo-button,
+ .mindmap-mobile-redo-button,
  .mindmap-mobile-delete-button,
  .mindmap-mobile-note-button,
  .mindmap-mobile-sync-button,
@@ -219,7 +330,12 @@
    color: #dbe6ff;
  }
 
- .mindmap-root-view.is-mobile .mindmap-mobile-undo-button.is-disabled {
+ .mindmap-root-view.is-mobile .mindmap-mobile-redo-button {
+   color: #ffdff6;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-undo-button.is-disabled,
+ .mindmap-root-view.is-mobile .mindmap-mobile-redo-button.is-disabled {
    opacity: 0.52;
  }
 
@@ -292,7 +408,9 @@
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button:active,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sibling-add-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-undo-button:active,
+ .mindmap-root-view.is-mobile .mindmap-mobile-redo-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button:active,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button:active,
@@ -304,7 +422,9 @@
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button::before,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sibling-add-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-undo-button::before,
+ .mindmap-root-view.is-mobile .mindmap-mobile-redo-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button::before,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button::before,
@@ -321,7 +441,9 @@
  }
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-sibling-add-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-undo-button,
+ .mindmap-root-view.is-mobile .mindmap-mobile-redo-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-note-button,
  .mindmap-root-view.is-mobile .mindmap-mobile-center-button,
@@ -334,6 +456,10 @@
 
  .mindmap-root-view.is-mobile .mindmap-mobile-add-button {
    color: #d9ffe1;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-mobile-sibling-add-button {
+   color: #d8f6ff;
  }
 
  .mindmap-layout {
@@ -441,6 +567,22 @@
    stroke: #cfeaff;
    stroke-width: 2.6;
    filter: drop-shadow(0 0 6px rgba(143, 208, 255, 0.55));
+ }
+
+ .mindmap-node.is-drag-ghost {
+   fill: rgba(143, 208, 255, 0.08);
+   stroke: rgba(207, 234, 255, 0.7);
+   stroke-width: 1.6;
+   stroke-dasharray: 6 5;
+   filter: none;
+ }
+
+ .mindmap-node-title.is-drag-ghost {
+   color: rgba(231, 245, 255, 0.72);
+ }
+
+ .mindmap-node-group.is-drag-ghost {
+   pointer-events: none;
  }
 
  .mindmap-node-group {
