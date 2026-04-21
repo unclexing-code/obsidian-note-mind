@@ -2,9 +2,17 @@ import { ItemView, MarkdownRenderer, Menu, Notice, Platform, TFile, normalizePat
 import { addChildNode, findNodeById, findParentOfNode, normalizeMindmapDocument, removeNode, reorderNodeWithinParent, reparentNode, visibleNodes } from "./store";
 import type { MindmapDocument, MindmapNode } from "./types";
 
+type MindmapClipboardPayload = {
+  version: 1;
+  sourcePath: string | null;
+  subtree: MindmapNode;
+  operation: "copy" | "cut";
+};
+
 export const MINDMAP_VIEW_TYPE = "mindmap-view";
 
 export class MindmapView extends ItemView {
+  private static readonly MINDMAP_CLIPBOARD_STORAGE_KEY = "obsidian-note-mind:clipboard";
   private static readonly DEFAULT_NODE_WIDTH = 160;
   private static readonly DEFAULT_NODE_HEIGHT = 44;
   private static readonly MIN_NODE_WIDTH = 120;
@@ -74,6 +82,7 @@ export class MindmapView extends ItemView {
   private isReloadingFromDisk = false;
   private blockEdgeSidebarGesture = false;
   private isZenMode = false;
+  private shouldForceMobileZenOnNextRender = false;
   private navigationStack: string[] = [];
   private undoStack: MindmapDocument[] = [];
   private redoStack: MindmapDocument[] = [];
@@ -116,6 +125,36 @@ export class MindmapView extends ItemView {
         this.closeDrawer();
       }
       return;
+    }
+    if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+      if (this.shouldIgnoreMindmapShortcuts(event)) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === "c") {
+        if (!this.doc || !this.selectedNodeId) {
+          return;
+        }
+        event.preventDefault();
+        this.copyNodeSubtree(this.selectedNodeId);
+        return;
+      }
+      if (key === "x") {
+        if (!this.doc || !this.selectedNodeId) {
+          return;
+        }
+        event.preventDefault();
+        void this.cutNodeSubtree(this.selectedNodeId);
+        return;
+      }
+      if (key === "v") {
+        if (!this.doc || !this.selectedNodeId) {
+          return;
+        }
+        event.preventDefault();
+        this.pasteClipboardSubtreeToNode(this.selectedNodeId);
+        return;
+      }
     }
     if (event.key === "Escape" && !this.drawerEl.hasClass("is-hidden")) {
       event.preventDefault();
@@ -183,6 +222,146 @@ export class MindmapView extends ItemView {
 
   private cloneDocument(doc: MindmapDocument): MindmapDocument {
     return JSON.parse(JSON.stringify(doc)) as MindmapDocument;
+  }
+
+  private cloneNode(node: MindmapNode): MindmapNode {
+    return JSON.parse(JSON.stringify(node)) as MindmapNode;
+  }
+
+  private getClipboardPayload(): MindmapClipboardPayload | null {
+    try {
+      const raw = window.localStorage.getItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      const parsed = JSON.parse(raw) as Partial<MindmapClipboardPayload>;
+      if (parsed.version !== 1 || !parsed.subtree) {
+        return null;
+      }
+      return {
+        version: 1,
+        sourcePath: typeof parsed.sourcePath === "string" ? parsed.sourcePath : null,
+        subtree: this.cloneNode(parsed.subtree as MindmapNode),
+        operation: parsed.operation === "cut" ? "cut" : "copy"
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private hasClipboardSubtree(): boolean {
+    return !!this.getClipboardPayload();
+  }
+
+  private writeClipboardPayload(node: MindmapNode, operation: "copy" | "cut"): void {
+    const payload: MindmapClipboardPayload = {
+      version: 1,
+      sourcePath: this.file?.path ?? null,
+      subtree: this.cloneNode(node),
+      operation
+    };
+    window.localStorage.setItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY, JSON.stringify(payload));
+  }
+
+  private copyNodeSubtree(nodeId: string): void {
+    if (!this.doc) {
+      return;
+    }
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return;
+    }
+    this.writeClipboardPayload(node, "copy");
+    new Notice(`已复制节点「${node.title}」及其子树`);
+    this.updateMobileActionButtons();
+  }
+
+  private reassignSubtreeIds(node: MindmapNode): MindmapNode {
+    const cloned = this.cloneNode(node);
+    const walk = (current: MindmapNode): void => {
+      current.id = crypto.randomUUID();
+      current.children.forEach(walk);
+    };
+    walk(cloned);
+    return cloned;
+  }
+
+  private pasteSubtreeIntoParent(parent: MindmapNode, subtree: MindmapNode): MindmapNode {
+    const inserted = this.reassignSubtreeIds(subtree);
+    inserted.x = parent.x + 180;
+    inserted.y = parent.y + (parent.children.length + 1) * 56;
+    parent.children.push(inserted);
+    parent.collapsed = false;
+    return inserted;
+  }
+
+  private async cutNodeSubtree(nodeId: string): Promise<void> {
+    if (!this.doc) {
+      return;
+    }
+    if (nodeId === this.doc.root.id) {
+      new Notice("根节点不可剪切");
+      return;
+    }
+    const node = findNodeById(this.doc, nodeId);
+    const parentLookup = findParentOfNode(this.doc, nodeId);
+    if (!node || !parentLookup) {
+      return;
+    }
+    const accepted = window.confirm(`确认剪切节点「${node.title}」及其全部子孙节点吗？`);
+    if (!accepted) {
+      return;
+    }
+    const snapshotBeforeCut = this.cloneDocument(this.doc);
+    this.writeClipboardPayload(node, "cut");
+    const result = removeNode(this.doc, nodeId);
+    if (!result) {
+      new Notice("剪切失败：未找到节点");
+      return;
+    }
+    this.pushHistoryState(snapshotBeforeCut);
+    this.selectedNodeId = result.parent.id;
+    this.selectedNodeIds = new Set([result.parent.id]);
+    this.editingNodeId = null;
+    if (!this.drawerEl.hasClass("is-hidden")) {
+      await this.syncOpenDrawerWithSelection();
+    }
+    this.closeMobileNodeTooltip();
+    this.playNodeActionSound("delete");
+    this.normalizeLayoutKeepingNodePosition(result.parent.id);
+    this.requestSave();
+    this.updateMobileActionButtons();
+    this.updateMobileActionClusterVisibility();
+    this.renderMindmap();
+    new Notice("已剪切节点，可粘贴到任意导图节点下");
+  }
+
+  private pasteClipboardSubtreeToNode(parentId: string): void {
+    if (!this.doc) {
+      return;
+    }
+    const payload = this.getClipboardPayload();
+    if (!payload) {
+      new Notice("剪贴板里没有可粘贴的节点");
+      return;
+    }
+    const parent = findNodeById(this.doc, parentId);
+    if (!parent) {
+      new Notice("未找到粘贴目标节点");
+      return;
+    }
+    const snapshotBeforePaste = this.cloneDocument(this.doc);
+    const inserted = this.pasteSubtreeIntoParent(parent, payload.subtree);
+    this.pushHistoryState(snapshotBeforePaste);
+    this.setSingleSelectedNode(inserted.id);
+    this.closeMobileNodeTooltip();
+    this.playNodeActionSound("add");
+    this.normalizeLayoutKeepingNodePosition(parent.id);
+    this.requestSave();
+    this.updateMobileActionButtons();
+    this.updateMobileActionClusterVisibility();
+    this.renderMindmap();
+    new Notice(`已将${payload.operation === "cut" ? "剪切" : "复制"}内容粘贴到「${parent.title}」下`);
   }
 
   private captureHistorySnapshot(): void {
@@ -1499,6 +1678,9 @@ export class MindmapView extends ItemView {
   private async loadFromFile(): Promise<void> {
     if (!this.file) {
       this.doc = null;
+      if (this.isMobileLayout) {
+        this.setZenMode(false);
+      }
       return;
     }
     try {
@@ -1516,9 +1698,17 @@ export class MindmapView extends ItemView {
       }
       this.shouldCenterOnNextRender = true;
       this.shouldFocusRootOnNextRender = true;
+      if (this.isMobileLayout) {
+        this.shouldForceMobileZenOnNextRender = true;
+        this.closeDrawer();
+        this.closeMobileNodeTooltip();
+      }
     } catch (error) {
       new Notice(`导图读取失败：${String(error)}`);
       this.doc = null;
+      if (this.isMobileLayout) {
+        this.setZenMode(false);
+      }
     }
   }
 
@@ -1577,6 +1767,11 @@ export class MindmapView extends ItemView {
         this.centerViewportOnNodes(nodes);
       }
       this.shouldCenterOnNextRender = false;
+    }
+
+    if (this.shouldForceMobileZenOnNextRender) {
+      this.shouldForceMobileZenOnNextRender = false;
+      this.setZenMode(true);
     }
 
     this.updateViewportTransform();
@@ -2381,10 +2576,12 @@ export class MindmapView extends ItemView {
     }
     this.selectedNodeId = node.id;
     this.selectedNodeIds = new Set([node.id]);
+    this.editingNodeId = null;
     this.drawerEl.removeClass("is-hidden");
     this.layoutEl.addClass("has-drawer");
     this.updateMobileActionButtons();
     await this.syncDrawerToNode(node.id);
+    this.updateMobileActionClusterVisibility();
     this.renderMindmap();
   }
 
@@ -2414,7 +2611,7 @@ export class MindmapView extends ItemView {
     this.mobileLinkButtonEl?.toggleAttribute("hidden", !hasLink);
     this.mobileUndoButtonEl?.toggleClass("is-disabled", !canUndo);
     this.mobileUndoButtonEl?.setAttribute("aria-disabled", canUndo ? "false" : "true");
-    this.mobileUndoButtonEl?.setAttribute("data-undo-count", canUndo ? String(this.undoStack.length) : "");
+    this.mobileUndoButtonEl?.removeAttribute("data-undo-count");
     this.mobileRedoButtonEl?.toggleClass("is-disabled", !canRedo);
     this.mobileRedoButtonEl?.setAttribute("aria-disabled", canRedo ? "false" : "true");
   }
@@ -2486,7 +2683,14 @@ export class MindmapView extends ItemView {
       if (!target) {
         return full;
       }
-      const file = this.app.metadataCache.getFirstLinkpathDest(target, this.file?.path ?? "");
+      const normalizedTarget = normalizePath(target);
+      const resolvedByLink = this.app.metadataCache.getFirstLinkpathDest(target, this.file?.path ?? "");
+      const resolvedByExactPath = this.app.vault.getAbstractFileByPath(normalizedTarget);
+      const file = resolvedByLink instanceof TFile
+        ? resolvedByLink
+        : resolvedByExactPath instanceof TFile
+          ? resolvedByExactPath
+          : null;
       if (!(file instanceof TFile)) {
         return full;
       }
@@ -2848,12 +3052,30 @@ export class MindmapView extends ItemView {
     const node = this.doc ? findNodeById(this.doc, nodeId) : null;
     const linkTarget = node?.linkTarget?.trim() ?? "";
     const hasLink = linkTarget.length > 0;
+    const canPaste = !!node && this.hasClipboardSubtree();
     const menu = new Menu();
     menu.addItem((item) => {
       item.setTitle("查看").setIcon("file-text").onClick(() => {
         void this.openDrawer(nodeId);
       });
     });
+    // menu.addItem((item) => {
+    //   item.setTitle("添加子节点").setIcon("plus").onClick(() => {
+    //     this.createChildNode(nodeId);
+    //   });
+    // });
+    // menu.addItem((item) => {
+    //   item.setTitle("重命名节点").setIcon("pencil").onClick(() => {
+    //     this.renameNode(nodeId);
+    //   });
+    // });
+    // if (canPaste) {
+    //   menu.addItem((item) => {
+    //     item.setTitle("粘贴为子节点").setIcon("clipboard-paste").onClick(() => {
+    //       this.pasteClipboardSubtreeToNode(nodeId);
+    //     });
+    //   });
+    // }
     if (hasLink) {
       menu.addItem((item) => {
         item.setTitle("跳转").setIcon("arrow-up-right").onClick(() => {
@@ -2861,49 +3083,6 @@ export class MindmapView extends ItemView {
         });
       });
     }
-    // menu.addItem((item) => {
-    //   item.setTitle(hasLink ? "添加/替换链接" : "添加链接").setIcon("link").onClick(() => {
-    //     void this.openDrawer(nodeId).then(() => {
-    //       if (!hasLink) {
-    //         this.nodeLinkInputEl.value = "";
-    //         const currentNode = this.doc ? findNodeById(this.doc, nodeId) : null;
-    //         if (currentNode) {
-    //           currentNode.linkTarget = "";
-    //           this.requestSave();
-    //           this.renderMindmap();
-    //         }
-    //       }
-    //       window.setTimeout(() => this.nodeLinkInputEl.focus(), 0);
-    //     });
-    //   });
-    // });
-    // if (hasLink) {
-    //   menu.addItem((item) => {
-    //     item.setTitle("编辑链接").setIcon("pencil").onClick(() => {
-    //       void this.openDrawer(nodeId).then(() => {
-    //         window.setTimeout(() => {
-    //           this.nodeLinkInputEl.focus();
-    //           this.nodeLinkInputEl.select();
-    //         }, 0);
-    //       });
-    //     });
-    //   });
-    //   menu.addItem((item) => {
-    //     item.setTitle("清除链接").setIcon("unlink").onClick(() => {
-    //       this.clearNodeLink(nodeId);
-    //     });
-    //   });
-    // }
-    // menu.addItem((item) => {
-    //   item.setTitle("重命名节点").setIcon("pencil").onClick(() => {
-    //     this.renameNode(nodeId);
-    //   });
-    // });
-    // menu.addItem((item) => {
-    //   item.setTitle("添加子节点").setIcon("plus").onClick(() => {
-    //     this.createChildNode(nodeId);
-    //   });
-    // });
     // menu.addItem((item) => {
     //   item
     //     .setTitle("删除节点")
@@ -3200,6 +3379,17 @@ export class MindmapView extends ItemView {
       this.insertTextAtCursor(`\n${markdownLink}\n`);
     }
     this.noteInputEl.dispatchEvent(new Event("input"));
+    const latestMarkdown = this.noteInputEl.value;
+    window.setTimeout(() => {
+      if (this.noteInputEl?.value === latestMarkdown) {
+        void this.renderMarkdown(latestMarkdown);
+      }
+    }, 180);
+    window.setTimeout(() => {
+      if (this.noteInputEl?.value === latestMarkdown) {
+        void this.renderMarkdown(latestMarkdown);
+      }
+    }, 600);
   }
 
   private insertTextAtCursor(text: string): void {
@@ -3307,6 +3497,7 @@ export class MindmapView extends ItemView {
     this.noteHistoryCapturedForSession = false;
     this.linkHistoryCapturedForSession = false;
     this.setNoteEditing(false);
+    this.updateMobileActionClusterVisibility();
   }
 
   private clearCanvasSelection(): void {
@@ -3326,7 +3517,8 @@ export class MindmapView extends ItemView {
       return;
     }
     const noteInputFocused = document.activeElement === this.noteInputEl;
-    const hidden = this.editingNodeId !== null || noteInputFocused;
+    const noteDrawerEditing = !this.drawerEl?.hasClass("is-hidden") && this.noteSurfaceEl?.hasClass("is-editing");
+    const hidden = this.editingNodeId !== null || noteInputFocused || noteDrawerEditing;
     this.mobileActionClusterEl.toggleClass("is-editing-hidden", hidden);
     this.mobileNodeTooltipEl?.toggleClass("is-editing-hidden", hidden);
     this.mobileGlobalActionClusterEl?.toggleClass("is-editing-hidden", hidden);
