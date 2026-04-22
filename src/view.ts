@@ -2554,6 +2554,12 @@ export class MindmapView extends ItemView {
   }
 
   private async syncOpenDrawerWithSelection(): Promise<void> {
+    if (this.editingNodeId !== null) {
+      if (!this.drawerEl.hasClass("is-hidden")) {
+        this.closeDrawer();
+      }
+      return;
+    }
     if (this.drawerEl.hasClass("is-hidden")) {
       return;
     }
@@ -2967,6 +2973,7 @@ export class MindmapView extends ItemView {
       return;
     }
     const anchorNodeId = parent.id;
+    this.closeDrawer();
     this.captureHistorySnapshot();
     const child = addChildNode(this.doc, parentId, {
       x: parent.x + 180,
@@ -2995,6 +3002,7 @@ export class MindmapView extends ItemView {
     }
     const anchorNodeId = nodeId;
     const insertIndex = parentLookup.index + 1;
+    this.closeDrawer();
     this.captureHistorySnapshot();
     const sibling = {
       id: crypto.randomUUID(),
@@ -3550,6 +3558,7 @@ export class MindmapView extends ItemView {
       window.clearTimeout(this.pendingNodeSelectionTimer);
       this.pendingNodeSelectionTimer = null;
     }
+    this.closeDrawer();
     this.selectedNodeId = nodeId;
     this.selectedNodeIds = new Set([nodeId]);
     this.editingNodeId = nodeId;
