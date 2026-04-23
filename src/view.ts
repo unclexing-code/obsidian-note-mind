@@ -3299,6 +3299,7 @@ export class MindmapView extends ItemView {
     const horizontalGap = 60;
     const verticalGap = 34;
     const root = this.doc.root;
+    const anchoredRootY = root.y;
 
     const measureSubtreeHeight = (node: MindmapNode): number => {
       const nodeHeight = this.ensureNodeSize(node).height;
@@ -3358,7 +3359,13 @@ export class MindmapView extends ItemView {
     };
 
     const totalHeight = Math.max(this.ensureNodeSize(root).height, measureSubtreeHeight(root));
-    place(root, root.y - totalHeight / 2, null);
+    place(root, anchoredRootY - totalHeight / 2, null);
+    const rootShiftY = anchoredRootY - root.y;
+    if (Math.abs(rootShiftY) > 0.001) {
+      visibleNodes(root).forEach((node) => {
+        node.y += rootShiftY;
+      });
+    }
   }
 
   private async handlePaste(event: ClipboardEvent): Promise<void> {
