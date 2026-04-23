@@ -6,6 +6,7 @@ type MindmapClipboardPayload = {
   version: 1;
   sourcePath: string | null;
   subtree: MindmapNode;
+  forest?: MindmapNode[];
   operation: "copy" | "cut";
 };
 
@@ -132,19 +133,19 @@ export class MindmapView extends ItemView {
       }
       const key = event.key.toLowerCase();
       if (key === "c") {
-        if (!this.doc || !this.selectedNodeId) {
+        if (!this.doc || (!this.selectedNodeId && this.selectedNodeIds.size === 0)) {
           return;
         }
         event.preventDefault();
-        this.copyNodeSubtree(this.selectedNodeId);
+        this.copySelectedNodeSubtrees();
         return;
       }
       if (key === "x") {
-        if (!this.doc || !this.selectedNodeId) {
+        if (!this.doc || (!this.selectedNodeId && this.selectedNodeIds.size === 0)) {
           return;
         }
         event.preventDefault();
-        void this.cutNodeSubtree(this.selectedNodeId);
+        void this.cutSelectedNodeSubtrees();
         return;
       }
       if (key === "v") {
@@ -175,7 +176,19 @@ export class MindmapView extends ItemView {
       event.preventDefault();
       return;
     }
-    if (!this.doc || !this.selectedNodeId) {
+    if (!this.doc) {
+      return;
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      const rootIds = this.getSelectedOperationRootIds();
+      if (rootIds.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      void this.deleteSelectedNodeSubtrees();
+      return;
+    }
+    if (!this.selectedNodeId) {
       return;
     }
     if (event.key === "Tab") {
@@ -187,10 +200,6 @@ export class MindmapView extends ItemView {
       event.preventDefault();
       this.createSiblingNode(this.selectedNodeId);
       return;
-    }
-    if (event.key === "Delete" || event.key === "Backspace") {
-      event.preventDefault();
-      void this.deleteNodeById(this.selectedNodeId);
     }
   };
   private shouldIgnoreMindmapShortcuts(event: KeyboardEvent): boolean {
@@ -220,6 +229,10 @@ export class MindmapView extends ItemView {
     this.containerEl.focus({ preventScroll: true });
   }
 
+  private isDirectLinkOpenGesture(event: MouseEvent | PointerEvent): boolean {
+    return (event.metaKey || event.ctrlKey) && event.altKey;
+  }
+
   private cloneDocument(doc: MindmapDocument): MindmapDocument {
     return JSON.parse(JSON.stringify(doc)) as MindmapDocument;
   }
@@ -235,13 +248,22 @@ export class MindmapView extends ItemView {
         return null;
       }
       const parsed = JSON.parse(raw) as Partial<MindmapClipboardPayload>;
-      if (parsed.version !== 1 || !parsed.subtree) {
+      if (parsed.version !== 1 || (!parsed.subtree && !parsed.forest?.length)) {
+        return null;
+      }
+      const forest = Array.isArray(parsed.forest)
+        ? parsed.forest.map((node) => this.cloneNode(node as MindmapNode))
+        : parsed.subtree
+          ? [this.cloneNode(parsed.subtree as MindmapNode)]
+          : [];
+      if (forest.length === 0) {
         return null;
       }
       return {
         version: 1,
         sourcePath: typeof parsed.sourcePath === "string" ? parsed.sourcePath : null,
-        subtree: this.cloneNode(parsed.subtree as MindmapNode),
+        subtree: forest[0],
+        forest,
         operation: parsed.operation === "cut" ? "cut" : "copy"
       };
     } catch {
@@ -254,13 +276,56 @@ export class MindmapView extends ItemView {
   }
 
   private writeClipboardPayload(node: MindmapNode, operation: "copy" | "cut"): void {
+    this.writeClipboardForest([node], operation);
+  }
+
+  private writeClipboardForest(nodes: MindmapNode[], operation: "copy" | "cut"): void {
+    const forest = nodes.map((node) => this.cloneNode(node));
     const payload: MindmapClipboardPayload = {
       version: 1,
       sourcePath: this.file?.path ?? null,
-      subtree: this.cloneNode(node),
+      subtree: forest[0],
+      forest,
       operation
     };
     window.localStorage.setItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY, JSON.stringify(payload));
+  }
+
+  private getSelectedOperationRootIds(): string[] {
+    if (!this.doc) {
+      return [];
+    }
+    const selectedIds = this.selectedNodeIds.size > 0
+      ? Array.from(this.selectedNodeIds)
+      : this.selectedNodeId
+        ? [this.selectedNodeId]
+        : [];
+    const existingSelectedIds = selectedIds.filter((id) => !!findNodeById(this.doc!, id));
+    return existingSelectedIds.filter((id) => {
+      const lookup = findParentOfNode(this.doc!, id);
+      return !lookup || !existingSelectedIds.includes(lookup.parent.id);
+    });
+  }
+
+  private copySelectedNodeSubtrees(): void {
+    if (!this.doc) {
+      return;
+    }
+    const rootIds = this.getSelectedOperationRootIds();
+    if (rootIds.length === 0) {
+      return;
+    }
+    const nodes = rootIds
+      .map((id) => findNodeById(this.doc!, id))
+      .filter((node): node is MindmapNode => !!node);
+    if (nodes.length === 0) {
+      return;
+    }
+    this.writeClipboardForest(nodes, "copy");
+    new Notice(nodes.length === 1
+      ? `已复制节点「${nodes[0].title}」及其子树`
+      : `已复制 ${nodes.length} 个节点子树`);
+    this.updateMobileActionButtons();
   }
 
   private copyNodeSubtree(nodeId: string): void {
@@ -293,6 +358,58 @@ export class MindmapView extends ItemView {
     parent.children.push(inserted);
     parent.collapsed = false;
     return inserted;
+  }
+
+  private async cutSelectedNodeSubtrees(): Promise<void> {
+    if (!this.doc) {
+      return;
+    }
+    const rootIds = this.getSelectedOperationRootIds();
+    if (rootIds.length === 0) {
+      return;
+    }
+    if (rootIds.includes(this.doc.root.id)) {
+      new Notice("根节点不可剪切");
+      return;
+    }
+    const nodes = rootIds
+      .map((id) => findNodeById(this.doc!, id))
+      .filter((node): node is MindmapNode => !!node);
+    if (nodes.length === 0) {
+      return;
+    }
+    const accepted = window.confirm(nodes.length === 1
+      ? `确认剪切节点「${nodes[0].title}」及其全部子孙节点吗？`
+      : `确认剪切这 ${nodes.length} 个节点及其全部子孙节点吗？`);
+    if (!accepted) {
+      return;
+    }
+    const snapshotBeforeCut = this.cloneDocument(this.doc);
+    this.writeClipboardForest(nodes, "cut");
+    const affectedParentIds = new Set<string>();
+    rootIds.forEach((nodeId) => {
+      const parentLookup = findParentOfNode(this.doc!, nodeId);
+      if (parentLookup) {
+        affectedParentIds.add(parentLookup.parent.id);
+      }
+      removeNode(this.doc!, nodeId);
+    });
+    this.pushHistoryState(snapshotBeforeCut);
+    const fallbackSelectionId = Array.from(affectedParentIds)[0] ?? this.doc.root.id;
+    this.selectedNodeId = fallbackSelectionId;
+    this.selectedNodeIds = new Set([fallbackSelectionId]);
+    this.editingNodeId = null;
+    if (!this.drawerEl.hasClass("is-hidden")) {
+      await this.syncOpenDrawerWithSelection();
+    }
+    this.closeMobileNodeTooltip();
+    this.playNodeActionSound("delete");
+    this.normalizeLayoutKeepingNodePosition(fallbackSelectionId);
+    this.requestSave();
+    this.updateMobileActionButtons();
+    this.updateMobileActionClusterVisibility();
+    this.renderMindmap();
+    new Notice(nodes.length === 1 ? "已剪切节点，可粘贴到任意导图节点下" : `已剪切 ${nodes.length} 个节点，可粘贴到任意导图节点下`);
   }
 
   private async cutNodeSubtree(nodeId: string): Promise<void> {
@@ -336,6 +453,67 @@ export class MindmapView extends ItemView {
     new Notice("已剪切节点，可粘贴到任意导图节点下");
   }
 
+  private deleteSelectedNodeSubtrees(): Promise<void> {
+    if (!this.doc) {
+      return Promise.resolve();
+    }
+    const rootIds = this.getSelectedOperationRootIds();
+    if (rootIds.length === 0) {
+      return Promise.resolve();
+    }
+    if (rootIds.includes(this.doc.root.id)) {
+      new Notice("根节点不可删除");
+      return Promise.resolve();
+    }
+    const nodes = rootIds
+      .map((id) => findNodeById(this.doc!, id))
+      .filter((node): node is MindmapNode => !!node);
+    if (nodes.length === 0) {
+      return Promise.resolve();
+    }
+    const accepted = window.confirm(nodes.length === 1
+      ? `确认删除节点「${nodes[0].title}」及其全部子孙节点吗？`
+      : `确认删除这 ${nodes.length} 个节点及其全部子孙节点吗？`);
+    if (!accepted) {
+      return Promise.resolve();
+    }
+    const snapshotBeforeDelete = this.cloneDocument(this.doc);
+    const affectedParentIds = new Set<string>();
+    rootIds.forEach((nodeId) => {
+      const parentLookup = findParentOfNode(this.doc!, nodeId);
+      if (parentLookup) {
+        affectedParentIds.add(parentLookup.parent.id);
+      }
+      removeNode(this.doc!, nodeId);
+    });
+    this.pushHistoryState(snapshotBeforeDelete);
+    const fallbackSelectionId = Array.from(affectedParentIds)[0] ?? this.doc.root.id;
+    this.selectedNodeId = fallbackSelectionId;
+    this.selectedNodeIds = new Set([fallbackSelectionId]);
+    this.editingNodeId = null;
+    if (!this.drawerEl.hasClass("is-hidden")) {
+      return this.syncOpenDrawerWithSelection().then(() => {
+        this.closeMobileNodeTooltip();
+        this.playNodeActionSound("delete");
+        this.normalizeLayoutKeepingNodePosition(fallbackSelectionId);
+        this.requestSave();
+        this.updateMobileActionButtons();
+        this.updateMobileActionClusterVisibility();
+        this.renderMindmap();
+        new Notice(nodes.length === 1 ? "已删除节点" : `已删除 ${nodes.length} 个节点`);
+      });
+    }
+    this.closeMobileNodeTooltip();
+    this.playNodeActionSound("delete");
+    this.normalizeLayoutKeepingNodePosition(fallbackSelectionId);
+    this.requestSave();
+    this.updateMobileActionButtons();
+    this.updateMobileActionClusterVisibility();
+    this.renderMindmap();
+    new Notice(nodes.length === 1 ? "已删除节点" : `已删除 ${nodes.length} 个节点`);
+    return Promise.resolve();
+  }
+
   private pasteClipboardSubtreeToNode(parentId: string): void {
     if (!this.doc) {
       return;
@@ -351,9 +529,12 @@ export class MindmapView extends ItemView {
       return;
     }
     const snapshotBeforePaste = this.cloneDocument(this.doc);
-    const inserted = this.pasteSubtreeIntoParent(parent, payload.subtree);
+    const forest = payload.forest?.length ? payload.forest : [payload.subtree];
+    const insertedNodes = forest.map((subtree) => this.pasteSubtreeIntoParent(parent, subtree));
     this.pushHistoryState(snapshotBeforePaste);
-    this.setSingleSelectedNode(inserted.id);
+    const selectedInsertedIds = insertedNodes.map((node) => node.id);
+    this.selectedNodeId = selectedInsertedIds[0] ?? null;
+    this.selectedNodeIds = new Set(selectedInsertedIds);
     this.closeMobileNodeTooltip();
     this.playNodeActionSound("add");
     this.normalizeLayoutKeepingNodePosition(parent.id);
@@ -361,7 +542,9 @@ export class MindmapView extends ItemView {
     this.updateMobileActionButtons();
     this.updateMobileActionClusterVisibility();
     this.renderMindmap();
-    new Notice(`已将${payload.operation === "cut" ? "剪切" : "复制"}内容粘贴到「${parent.title}」下`);
+    new Notice(forest.length === 1
+      ? `已将${payload.operation === "cut" ? "剪切" : "复制"}内容粘贴到「${parent.title}」下`
+      : `已将 ${forest.length} 个${payload.operation === "cut" ? "剪切" : "复制"}节点粘贴到「${parent.title}」下`);
   }
 
   private captureHistorySnapshot(): void {
@@ -2029,10 +2212,24 @@ export class MindmapView extends ItemView {
       }
 
       group.addEventListener("pointerdown", (event) => {
+        if (this.isDirectLinkOpenGesture(event) && !!node.linkTarget?.trim()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         this.startDrag(event, node);
       });
       group.addEventListener("click", (event) => {
         if (event.target instanceof Element && event.target.closest(".mindmap-collapse-group, .mindmap-jump-group")) {
+          return;
+        }
+        if (this.isDirectLinkOpenGesture(event) && !!node.linkTarget?.trim()) {
+          event.preventDefault();
+          event.stopPropagation();
+          this.setSingleSelectedNode(node.id);
+          this.renderMindmap();
+          this.unlockMobileZenIfNeeded();
+          void this.openLinkedTarget(node.linkTarget);
           return;
         }
         if (this.pendingNodeSelectionTimer) {
@@ -2589,6 +2786,22 @@ export class MindmapView extends ItemView {
     await this.syncDrawerToNode(node.id);
     this.updateMobileActionClusterVisibility();
     this.renderMindmap();
+  }
+
+  async toggleDrawerForSelection(): Promise<boolean> {
+    if (this.editingNodeId !== null) {
+      return false;
+    }
+    if (!this.drawerEl.hasClass("is-hidden")) {
+      this.closeDrawer();
+      return true;
+    }
+    const targetNodeId = this.selectedNodeId ?? Array.from(this.selectedNodeIds)[0] ?? null;
+    if (!targetNodeId) {
+      return false;
+    }
+    await this.openDrawer(targetNodeId);
+    return true;
   }
 
   private updateNodeLinkActionButton(linkTarget: string): void {
@@ -3596,12 +3809,19 @@ export class MindmapView extends ItemView {
     input.addEventListener("pointerdown", (event) => event.stopPropagation());
     input.addEventListener("click", (event) => event.stopPropagation());
 
+    const restoreMindmapKeyboardFocus = (): void => {
+      this.activateMindmapLeaf();
+      this.focusContainerWithoutScroll();
+      window.setTimeout(() => this.focusContainerWithoutScroll(), 0);
+    };
+
     const commit = (): void => {
       void (async () => {
         if (!this.doc) {
           this.editingNodeId = null;
           this.updateMobileActionClusterVisibility();
           this.renderMindmap();
+          restoreMindmapKeyboardFocus();
           return;
         }
         const nextValue = input.value.trim();
@@ -3620,6 +3840,7 @@ export class MindmapView extends ItemView {
         this.normalizeLayoutKeepingNodePosition(node.id);
         this.requestSave();
         this.renderMindmap();
+        restoreMindmapKeyboardFocus();
       })();
     };
 
@@ -3627,6 +3848,7 @@ export class MindmapView extends ItemView {
       this.editingNodeId = null;
       this.setSingleSelectedNode(node.id);
       this.renderMindmap();
+      restoreMindmapKeyboardFocus();
     };
 
     input.addEventListener("keydown", (event) => {

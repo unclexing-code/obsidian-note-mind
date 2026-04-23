@@ -71,6 +71,26 @@ export default class MindmapPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "toggle-selected-node-note-drawer",
+      name: "Toggle selected node note drawer",
+      hotkeys: [{ modifiers: ["Mod"], key: "E" }],
+      checkCallback: (checking) => {
+        const activeView = this.app.workspace.getActiveViewOfType(MindmapView);
+        if (!(activeView instanceof MindmapView)) {
+          return false;
+        }
+        const canRun = !!activeView.getState().file;
+        if (!canRun) {
+          return false;
+        }
+        if (!checking) {
+          void activeView.toggleDrawerForSelection();
+        }
+        return true;
+      }
+    });
+
+    this.addCommand({
       id: "open-active-mindmap-in-view",
       name: "Open active mindmap in mindmap view",
       checkCallback: (checking) => {
