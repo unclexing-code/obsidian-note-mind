@@ -24,6 +24,7 @@ type MindmapLinkCandidate = {
 
 const PRIMARY_MINDMAP_EXTENSION = "mindmap";
 const LEGACY_MINDMAP_EXTENSION = "mindmap.json";
+const ASSOCIATED_MINDMAP_FOLDER_PATH = "思维导图";
 
 export const MINDMAP_VIEW_TYPE = "mindmap-view";
 
@@ -146,6 +147,7 @@ export class MindmapView extends ItemView {
   private static readonly DEFAULT_NODE_WIDTH = 160;
   private static readonly DEFAULT_NODE_HEIGHT = 44;
   private static readonly MIN_NODE_WIDTH = 120;
+  private static readonly MAX_NODE_WIDTH = 320;
   private static readonly MIN_NODE_HEIGHT = 44;
   private static readonly DEFAULT_DRAWER_WIDTH = 380;
   private static readonly MIN_DRAWER_WIDTH = 300;
@@ -289,11 +291,11 @@ export class MindmapView extends ItemView {
         return;
       }
       if (key === "v") {
-        if (!this.doc || !this.selectedNodeId) {
+        if (!this.doc) {
           return;
         }
         event.preventDefault();
-        this.pasteClipboardSubtreeToNode(this.selectedNodeId);
+        void this.handleMindmapPasteShortcut();
         return;
       }
     }
@@ -1646,6 +1648,7 @@ export class MindmapView extends ItemView {
     this.containerEl.toggleClass("is-mobile", this.isMobileLayout);
     this.containerEl.tabIndex = 0;
     this.containerEl.addEventListener("keydown", this.onKeydown);
+    this.containerEl.addEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     if (this.isMobileLayout) {
       this.containerEl.addEventListener("pointerdown", this.activateMindmapLeaf);
       this.containerEl.addEventListener("touchstart", this.activateMindmapLeaf, { passive: true });
@@ -2017,6 +2020,7 @@ export class MindmapView extends ItemView {
 
   async onClose(): Promise<void> {
     this.containerEl.removeEventListener("keydown", this.onKeydown);
+    this.containerEl.removeEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     if (this.isMobileLayout) {
       this.setZenMode(false);
       this.containerEl.removeEventListener("pointerdown", this.activateMindmapLeaf);
@@ -3171,8 +3175,23 @@ export class MindmapView extends ItemView {
     }
   }
 
+  private async ensureAssociationMindmapFolder(): Promise<TFolder> {
+    const folderPath = normalizePath(ASSOCIATED_MINDMAP_FOLDER_PATH);
+    const existing = this.app.vault.getAbstractFileByPath(folderPath);
+    if (existing instanceof TFolder) {
+      return existing;
+    }
+    await this.app.vault.createFolder(folderPath);
+    const created = this.app.vault.getAbstractFileByPath(folderPath);
+    if (!(created instanceof TFolder)) {
+      throw new Error(`Unable to create folder: ${folderPath}`);
+    }
+    return created;
+  }
+
   private async createMindmapForAssociation(title: string): Promise<TFile> {
-    const folderPath = this.file?.parent?.path ?? "";
+    const folder = await this.ensureAssociationMindmapFolder();
+    const folderPath = folder.path;
     const baseName = this.sanitizeMindmapFileBaseName(title);
     const finalPath = this.getNextMindmapPath(folderPath, baseName);
     const doc = createDefaultMindmap();
@@ -3293,10 +3312,10 @@ export class MindmapView extends ItemView {
     // this.nodeTitleInputEl.value = node.title;
     const isRootNode = node.id === this.doc.root.id;
     this.nodeLinkInputEl.value = node.linkTarget ?? "";
-    this.nodeLinkInputEl.disabled = isRootNode;
-    this.nodeLinkInputEl.toggleClass("is-readonly", isRootNode);
-    this.nodeLinkInputEl.placeholder = isRootNode ? "中心节点链接由跳转来源自动维护" : "输入链接目标：导图或笔记路径";
-    this.nodeLinkInputEl.setAttribute("aria-readonly", isRootNode ? "true" : "false");
+    this.nodeLinkInputEl.disabled = false;
+    this.nodeLinkInputEl.toggleClass("is-readonly", false);
+    this.nodeLinkInputEl.placeholder = isRootNode ? "输入中心节点链接目标：导图或笔记路径" : "输入链接目标：导图或笔记路径";
+    this.nodeLinkInputEl.setAttribute("aria-readonly", "false");
     this.updateNodeLinkActionButton(node.linkTarget ?? "");
     this.setNoteEditorValue(node.note ?? "");
     this.noteInputEl.value = node.note ?? "";
@@ -4066,21 +4085,17 @@ export class MindmapView extends ItemView {
     const node = this.doc ? findNodeById(this.doc, nodeId) : null;
     const linkTarget = node?.linkTarget?.trim() ?? "";
     const hasLink = linkTarget.length > 0;
-    const canPaste = !!node && this.hasClipboardSubtree();
-    const isRootNode = !!node && this.doc?.root.id === node.id;
     const menu = new Menu();
     menu.addItem((item) => {
       item.setTitle("查看").setIcon("file-text").onClick(() => {
         void this.openDrawer(nodeId);
       });
     });
-    if (!isRootNode) {
-      menu.addItem((item) => {
-        item.setTitle("关联").setIcon("link").onClick(() => {
-          this.openMindmapAssociationModal(nodeId);
-        });
+    menu.addItem((item) => {
+      item.setTitle("关联").setIcon("link").onClick(() => {
+        this.openMindmapAssociationModal(nodeId);
       });
-    }
+    });
     // menu.addItem((item) => {
     //   item.setTitle("添加子节点").setIcon("plus").onClick(() => {
     //     this.createChildNode(nodeId);
@@ -4381,6 +4396,202 @@ export class MindmapView extends ItemView {
       });
     }
   }
+
+  private createNodeFromMarkdownHeading(title: string, note: string): MindmapNode {
+    return {
+      id: crypto.randomUUID(),
+      title: title.trim() || "未命名节点",
+      x: 240,
+      y: 200,
+      collapsed: false,
+      note: note.trim(),
+      children: []
+    };
+  }
+
+  private stripMarkdownTitleMarkup(title: string): string {
+    return title
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1")
+      .replace(/[*_`~]/g, "")
+      .trim();
+  }
+
+  private markdownToMindmapDocument(markdownText: string): MindmapDocument | null {
+    const sections: Array<{ level: number; title: string; lines: string[] }> = [];
+    let current: { level: number; title: string; lines: string[] } | null = null;
+    let inFence = false;
+    const preamble: string[] = [];
+
+    markdownText.split(/\r?\n/).forEach((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        inFence = !inFence;
+      }
+      const headingMatch = !inFence ? /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line.trim()) : null;
+      if (headingMatch) {
+        current = {
+          level: headingMatch[1].length,
+          title: this.stripMarkdownTitleMarkup(headingMatch[2]),
+          lines: []
+        };
+        sections.push(current);
+        return;
+      }
+      if (current) {
+        current.lines.push(line);
+      } else {
+        preamble.push(line);
+      }
+    });
+
+    if (sections.length === 0) {
+      return null;
+    }
+
+    const firstSection = sections[0];
+    const rootNote = [...preamble, ...firstSection.lines].join("\n").trim();
+    const rootTitle = firstSection.title || this.file?.basename || "导图";
+    const root = this.createNodeFromMarkdownHeading(rootTitle, rootNote);
+    const stack: Array<{ level: number; node: MindmapNode }> = [{ level: firstSection.level, node: root }];
+
+    sections.slice(1).forEach((section) => {
+      const node = this.createNodeFromMarkdownHeading(section.title, section.lines.join("\n"));
+      while (stack.length > 1 && stack[stack.length - 1].level >= section.level) {
+        stack.pop();
+      }
+      const parent = stack[stack.length - 1]?.level < section.level
+        ? stack[stack.length - 1].node
+        : root;
+      parent.children.push(node);
+      stack.push({ level: section.level, node });
+    });
+
+    return {
+      version: 1,
+      root,
+      selfPath: this.file?.path
+    };
+  }
+
+  private isDefaultStarterMindmap(): boolean {
+    if (!this.doc) {
+      return true;
+    }
+    const root = this.doc.root;
+    return root.title === "中心主题"
+      && root.children.length === 2
+      && root.children[0]?.title === "子主题 A"
+      && root.children[1]?.title === "子主题 B";
+  }
+
+  private shouldTreatClipboardAsMindmapMarkdown(markdownText: string): boolean {
+    const doc = this.markdownToMindmapDocument(markdownText);
+    if (!doc) {
+      return false;
+    }
+    let headingCount = 0;
+    let inFence = false;
+    markdownText.split(/\r?\n/).forEach((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        inFence = !inFence;
+        return;
+      }
+      if (!inFence && /^(#{1,6})\s+/.test(line.trim())) {
+        headingCount += 1;
+      }
+    });
+    return headingCount >= 2 || this.isDefaultStarterMindmap();
+  }
+
+  private appendMarkdownDocumentToNode(targetNodeId: string, markdownDoc: MindmapDocument): boolean {
+    if (!this.doc) {
+      return false;
+    }
+    const targetNode = findNodeById(this.doc, targetNodeId);
+    if (!targetNode) {
+      return false;
+    }
+    this.captureHistorySnapshot();
+    targetNode.children.push(markdownDoc.root);
+    targetNode.collapsed = false;
+    this.selectedNodeId = markdownDoc.root.id;
+    this.selectedNodeIds = new Set([markdownDoc.root.id]);
+    this.editingNodeId = null;
+    this.closeMobileNodeTooltip();
+    this.noteHistoryCapturedForSession = false;
+    this.linkHistoryCapturedForSession = false;
+    this.normalizeLayoutKeepingNodePosition(targetNodeId);
+    this.requestSave();
+    this.renderMindmap();
+    return true;
+  }
+
+  private async applyMarkdownTextAsMindmap(markdownText: string, requireConfirmForNonDefault = true): Promise<boolean> {
+    if (!this.doc || !markdownText.trim() || !this.shouldTreatClipboardAsMindmapMarkdown(markdownText)) {
+      return false;
+    }
+    const nextDoc = this.markdownToMindmapDocument(markdownText);
+    if (!nextDoc) {
+      return false;
+    }
+    if (this.selectedNodeId) {
+      return this.appendMarkdownDocumentToNode(this.selectedNodeId, nextDoc);
+    }
+    if (requireConfirmForNonDefault && !this.isDefaultStarterMindmap()) {
+      const accepted = window.confirm("是否用剪贴板中的 Markdown 替换当前导图？");
+      if (!accepted) {
+        return true;
+      }
+    }
+    this.captureHistorySnapshot();
+    this.doc = normalizeMindmapDocument(nextDoc);
+    this.normalizeLayout();
+    this.selectedNodeId = this.doc.root.id;
+    this.selectedNodeIds = new Set([this.doc.root.id]);
+    this.editingNodeId = null;
+    this.closeDrawer();
+    this.closeMobileNodeTooltip();
+    this.noteHistoryCapturedForSession = false;
+    this.linkHistoryCapturedForSession = false;
+    this.shouldCenterOnNextRender = true;
+    this.shouldFocusRootOnNextRender = true;
+    this.requestSave();
+    this.renderMindmap();
+    return true;
+  }
+
+  private async handleMindmapPasteShortcut(): Promise<void> {
+    const target = document.activeElement;
+    if (target instanceof Element && target.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer, .mindmap-node-inline-input")) {
+      return;
+    }
+    try {
+      const markdownText = await navigator.clipboard.readText();
+      const handled = await this.applyMarkdownTextAsMindmap(markdownText, true);
+      if (handled) {
+        return;
+      }
+    } catch {
+      // ignore clipboard read failures and fall back to internal subtree paste
+    }
+    if (this.selectedNodeId) {
+      this.pasteClipboardSubtreeToNode(this.selectedNodeId);
+    }
+  }
+
+  private readonly handleCanvasMarkdownPaste = async (event: ClipboardEvent): Promise<void> => {
+    if (!event.clipboardData || !this.doc) {
+      return;
+    }
+    const target = event.target;
+    if (target instanceof Element && target.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer, .mindmap-node-inline-input")) {
+      return;
+    }
+    const markdownText = event.clipboardData.getData("text/plain");
+    const handled = await this.applyMarkdownTextAsMindmap(markdownText, true);
+    if (handled) {
+      event.preventDefault();
+    }
+  };
 
   private async handlePaste(event: ClipboardEvent): Promise<void> {
     if (!event.clipboardData) {
@@ -4738,11 +4949,11 @@ export class MindmapView extends ItemView {
   }
 
   private ensureNodeSize(node: MindmapNode): { width: number; height: number } {
-    const autoWidth = MindmapView.DEFAULT_NODE_WIDTH;
+    const autoWidth = this.measureAutoWidth(node.title);
     const autoHeight = this.measureAutoHeight(node.title, autoWidth);
 
     const width = node.manualSize && typeof node.width === "number"
-      ? Math.max(MindmapView.MIN_NODE_WIDTH, node.width)
+      ? Math.max(MindmapView.MIN_NODE_WIDTH, Math.min(MindmapView.MAX_NODE_WIDTH, node.width))
       : autoWidth;
     const height = node.manualSize && typeof node.height === "number"
       ? Math.max(MindmapView.MIN_NODE_HEIGHT, node.height)
@@ -4757,13 +4968,37 @@ export class MindmapView extends ItemView {
     return { width, height };
   }
 
+  private getNodeTitleMeasureContext(): CanvasRenderingContext2D | null {
+    const ctx = this.textMeasureCanvas.getContext("2d");
+    if (!ctx) {
+      return null;
+    }
+    ctx.font = '600 15px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+    return ctx;
+  }
+
+  private measureAutoWidth(title: string): number {
+    const content = title.trim() || " ";
+    const ctx = this.getNodeTitleMeasureContext();
+    if (!ctx) {
+      return MindmapView.DEFAULT_NODE_WIDTH;
+    }
+    const horizontalPadding = 28;
+    const longestLineWidth = content
+      .split("\n")
+      .reduce((maxWidth, line) => Math.max(maxWidth, ctx.measureText(line || " ").width), 0);
+    return Math.max(
+      MindmapView.MIN_NODE_WIDTH,
+      Math.min(MindmapView.MAX_NODE_WIDTH, Math.ceil(longestLineWidth + horizontalPadding))
+    );
+  }
+
   private measureAutoHeight(title: string, width: number): number {
     const content = title.trim() || " ";
-    const ctx = this.textMeasureCanvas.getContext("2d");
+    const ctx = this.getNodeTitleMeasureContext();
     if (!ctx) {
       return MindmapView.DEFAULT_NODE_HEIGHT;
     }
-    ctx.font = '600 15px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
     const maxLineWidth = Math.max(64, width - 28);
     const paragraphs = content.split("\n");
     let totalLines = 0;
