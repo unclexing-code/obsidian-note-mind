@@ -3653,8 +3653,13 @@ export class MindmapView extends ItemView {
       const targetLeaf = existingLeaf ?? (inNewTab ? this.app.workspace.getLeaf(true) : this.leaf);
       if (existingLeaf) {
         const view = existingLeaf.view;
-        if (view instanceof MindmapView && normalizedFocusLinkedFromPath) {
-          view.focusLinkedNodeFromPath(normalizedFocusLinkedFromPath);
+        if (view instanceof MindmapView) {
+          if (Platform.isMobile) {
+            view.setZenMode(true);
+          }
+          if (normalizedFocusLinkedFromPath) {
+            view.focusLinkedNodeFromPath(normalizedFocusLinkedFromPath);
+          }
         }
         this.app.workspace.revealLeaf(existingLeaf);
         return;
@@ -3673,6 +3678,9 @@ export class MindmapView extends ItemView {
         this.pendingFocusLinkedFromPath = normalizedFocusLinkedFromPath;
         await this.loadFromFile();
         this.closeDrawer();
+        if (this.isMobileLayout) {
+          this.setZenMode(true);
+        }
         this.focusLinkedNodeFromPendingPath();
         this.renderMindmap();
       }
