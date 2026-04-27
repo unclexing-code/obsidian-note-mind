@@ -1,5 +1,5 @@
 import { Notice, Plugin, TFile, TFolder, normalizePath, type WorkspaceLeaf } from "obsidian";
-import { createDefaultMindmap } from "./src/types";
+import { createDefaultMindmap, type MindmapDocument, type MindmapNode } from "./src/types";
 import { MINDMAP_VIEW_TYPE, MindmapView } from "./src/view";
 
 const PRIMARY_MINDMAP_EXTENSION = "mindmap";
@@ -61,6 +61,20 @@ export default class MindmapPlugin extends Plugin {
             void this.createMindmapFile(folder);
           });
         });
+        if (file instanceof TFile && this.isMindmapFile(file)) {
+          menu.addItem((item) => {
+            item.setTitle("导出为 Markdown").setIcon("file-text").onClick(() => {
+              void this.exportMindmapFileToMarkdown(file);
+            });
+          });
+        }
+        if (file instanceof TFile && this.isMarkdownFile(file)) {
+          menu.addItem((item) => {
+            item.setTitle("转换为思维导图").setIcon("network").onClick(() => {
+              void this.convertMarkdownFileToMindmap(file);
+            });
+          });
+        }
       })
     );
 
@@ -175,6 +189,144 @@ export default class MindmapPlugin extends Plugin {
     await this.openMindmapFile(newFile);
   }
 
+  private async exportMindmapFileToMarkdown(file: TFile): Promise<void> {
+    try {
+      const raw = await this.app.vault.cachedRead(file);
+      const doc = JSON.parse(raw) as MindmapDocument;
+      const markdown = this.mindmapDocumentToMarkdown(doc);
+      const folderPath = file.parent?.path ?? "";
+      const baseName = file.basename.replace(/\.mindmap$/i, "");
+      const finalPath = this.getNextMarkdownPath(folderPath, baseName);
+      const markdownFile = await this.app.vault.create(finalPath, markdown);
+      new Notice(`已导出 Markdown：${markdownFile.path}`);
+    } catch (error) {
+      new Notice(`导出 Markdown 失败：${String(error)}`);
+    }
+  }
+
+  private async convertMarkdownFileToMindmap(file: TFile): Promise<void> {
+    try {
+      const markdown = await this.app.vault.cachedRead(file);
+      const doc = this.markdownToMindmapDocument(markdown, file.basename, file.path);
+      const folderPath = file.parent?.path ?? "";
+      const finalPath = this.getNextMindmapPath(folderPath, file.basename);
+      doc.selfPath = finalPath;
+      const mindmapFile = await this.app.vault.create(finalPath, JSON.stringify(doc, null, 2));
+      new Notice(`已转换为思维导图：${mindmapFile.path}`);
+      await this.openMindmapFile(mindmapFile);
+    } catch (error) {
+      new Notice(`转换思维导图失败：${String(error)}`);
+    }
+  }
+
+  private createNodeFromMarkdownHeading(title: string, note: string): MindmapNode {
+    return {
+      id: crypto.randomUUID(),
+      title: title.trim() || "未命名节点",
+      x: 240,
+      y: 200,
+      collapsed: false,
+      note: note.trim(),
+      children: []
+    };
+  }
+
+  private stripMarkdownTitleMarkup(title: string): string {
+    return title
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1")
+      .replace(/[*_`~]/g, "")
+      .trim();
+  }
+
+  private markdownToMindmapDocument(markdownText: string, fallbackTitle: string, sourcePath?: string): MindmapDocument {
+    const sections: Array<{ level: number; title: string; lines: string[] }> = [];
+    let current: { level: number; title: string; lines: string[] } | null = null;
+    let inFence = false;
+    const preamble: string[] = [];
+
+    markdownText.split(/\r?\n/).forEach((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        inFence = !inFence;
+      }
+      const headingMatch = !inFence ? /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line.trim()) : null;
+      if (headingMatch) {
+        current = {
+          level: headingMatch[1].length,
+          title: this.stripMarkdownTitleMarkup(headingMatch[2]),
+          lines: []
+        };
+        sections.push(current);
+        return;
+      }
+      if (current) {
+        current.lines.push(line);
+      } else {
+        preamble.push(line);
+      }
+    });
+
+    if (sections.length === 0) {
+      const root = this.createNodeFromMarkdownHeading(fallbackTitle || "导图", markdownText);
+      return {
+        version: 1,
+        root,
+        selfPath: sourcePath
+      };
+    }
+
+    const firstSection = sections[0];
+    const rootNote = [...preamble, ...firstSection.lines].join("\n").trim();
+    const rootTitle = firstSection.title || fallbackTitle || "导图";
+    const root = this.createNodeFromMarkdownHeading(rootTitle, rootNote);
+    const stack: Array<{ level: number; node: MindmapNode }> = [{ level: firstSection.level, node: root }];
+
+    sections.slice(1).forEach((section) => {
+      const node = this.createNodeFromMarkdownHeading(section.title, section.lines.join("\n"));
+      while (stack.length > 1 && stack[stack.length - 1].level >= section.level) {
+        stack.pop();
+      }
+      const parent = stack[stack.length - 1]?.level < section.level
+        ? stack[stack.length - 1].node
+        : root;
+      parent.children.push(node);
+      stack.push({ level: section.level, node });
+    });
+
+    return {
+      version: 1,
+      root,
+      selfPath: sourcePath
+    };
+  }
+
+  private mindmapDocumentToMarkdown(doc: MindmapDocument): string {
+    const blocks: string[] = [];
+    const appendNode = (node: MindmapNode, depth: number): void => {
+      const headingLevel = Math.min(6, Math.max(1, depth));
+      blocks.push(`${"#".repeat(headingLevel)} ${node.title.trim() || "未命名节点"}`);
+      const note = node.note?.trim();
+      if (note) {
+        blocks.push(note);
+      }
+      node.children.forEach((child) => appendNode(child, depth + 1));
+    };
+    appendNode(doc.root, 1);
+    return `${blocks.join("\n\n").trim()}\n`;
+  }
+
+  private getNextMarkdownPath(folderPath: string, baseName: string): string {
+    let index = 0;
+    while (true) {
+      const suffix = index === 0 ? "" : ` ${index + 1}`;
+      const candidateName = `${baseName}${suffix}.md`;
+      const candidatePath = normalizePath(folderPath ? `${folderPath}/${candidateName}` : candidateName);
+      if (!this.app.vault.getAbstractFileByPath(candidatePath)) {
+        return candidatePath;
+      }
+      index += 1;
+    }
+  }
+
   private resolveCurrentFolder(): TFolder | null {
     const active = this.app.workspace.getActiveFile();
     if (active?.parent) {
@@ -202,6 +354,10 @@ export default class MindmapPlugin extends Plugin {
       return false;
     }
     return file.name.endsWith(`.${PRIMARY_MINDMAP_EXTENSION}`) || file.name.endsWith(`.${LEGACY_MINDMAP_EXTENSION}`);
+  }
+
+  private isMarkdownFile(file: TFile | null): file is TFile {
+    return !!file && file.extension.toLowerCase() === "md";
   }
 
   private scheduleMindmapTabDedupe(file?: TFile): void {
