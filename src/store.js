@@ -1,14 +1,18 @@
-export const walkNodes = (node, visitor, parent = null) => {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.visibleEdges = exports.visibleNodes = exports.reorderNodeWithinParent = exports.reparentNode = exports.isDescendantNode = exports.removeNode = exports.addChildNode = exports.findParentOfNode = exports.findNodeById = exports.normalizeMindmapDocument = exports.walkNodes = void 0;
+const walkNodes = (node, visitor, parent = null) => {
     visitor(node, parent);
-    node.children.forEach((child) => walkNodes(child, visitor, node));
+    node.children.forEach((child) => (0, exports.walkNodes)(child, visitor, node));
 };
-export const normalizeMindmapDocument = (doc) => {
+exports.walkNodes = walkNodes;
+const normalizeMindmapDocument = (doc) => {
     const normalized = {
         version: 1,
         root: doc.root,
         selfPath: doc.selfPath
     };
-    walkNodes(normalized.root, (node) => {
+    (0, exports.walkNodes)(normalized.root, (node) => {
         if (typeof node.linkTarget !== "string") {
             const legacyLink = node.jumpToMap;
             node.linkTarget = typeof legacyLink === "string" ? legacyLink : "";
@@ -16,21 +20,23 @@ export const normalizeMindmapDocument = (doc) => {
     });
     return normalized;
 };
-export const findNodeById = (doc, id) => {
+exports.normalizeMindmapDocument = normalizeMindmapDocument;
+const findNodeById = (doc, id) => {
     let found = null;
-    walkNodes(doc.root, (node) => {
+    (0, exports.walkNodes)(doc.root, (node) => {
         if (node.id === id) {
             found = node;
         }
     });
     return found;
 };
-export const findParentOfNode = (doc, id) => {
+exports.findNodeById = findNodeById;
+const findParentOfNode = (doc, id) => {
     if (doc.root.id === id) {
         return null;
     }
     let output = null;
-    walkNodes(doc.root, (node) => {
+    (0, exports.walkNodes)(doc.root, (node) => {
         if (output) {
             return;
         }
@@ -41,8 +47,9 @@ export const findParentOfNode = (doc, id) => {
     });
     return output;
 };
-export const addChildNode = (doc, parentId, initialPosition) => {
-    const parent = findNodeById(doc, parentId);
+exports.findParentOfNode = findParentOfNode;
+const addChildNode = (doc, parentId, initialPosition) => {
+    const parent = (0, exports.findNodeById)(doc, parentId);
     if (!parent) {
         return null;
     }
@@ -58,11 +65,12 @@ export const addChildNode = (doc, parentId, initialPosition) => {
     parent.collapsed = false;
     return child;
 };
-export const removeNode = (doc, id) => {
+exports.addChildNode = addChildNode;
+const removeNode = (doc, id) => {
     if (doc.root.id === id) {
         return null;
     }
-    const lookup = findParentOfNode(doc, id);
+    const lookup = (0, exports.findParentOfNode)(doc, id);
     if (!lookup) {
         return null;
     }
@@ -72,26 +80,28 @@ export const removeNode = (doc, id) => {
     }
     return { removed, parent: lookup.parent };
 };
-export const isDescendantNode = (ancestor, targetId) => {
+exports.removeNode = removeNode;
+const isDescendantNode = (ancestor, targetId) => {
     let found = false;
-    walkNodes(ancestor, (node) => {
+    (0, exports.walkNodes)(ancestor, (node) => {
         if (node.id === targetId) {
             found = true;
         }
     });
     return found;
 };
-export const reparentNode = (doc, nodeId, nextParentId) => {
+exports.isDescendantNode = isDescendantNode;
+const reparentNode = (doc, nodeId, nextParentId) => {
     if (doc.root.id === nodeId || nodeId === nextParentId) {
         return null;
     }
-    const movingNode = findNodeById(doc, nodeId);
-    const nextParent = findNodeById(doc, nextParentId);
-    const currentParentLookup = findParentOfNode(doc, nodeId);
+    const movingNode = (0, exports.findNodeById)(doc, nodeId);
+    const nextParent = (0, exports.findNodeById)(doc, nextParentId);
+    const currentParentLookup = (0, exports.findParentOfNode)(doc, nodeId);
     if (!movingNode || !nextParent || !currentParentLookup) {
         return null;
     }
-    if (isDescendantNode(movingNode, nextParentId)) {
+    if ((0, exports.isDescendantNode)(movingNode, nextParentId)) {
         return null;
     }
     if (currentParentLookup.parent.id === nextParentId) {
@@ -109,8 +119,9 @@ export const reparentNode = (doc, nodeId, nextParentId) => {
         nextParent
     };
 };
-export const reorderNodeWithinParent = (doc, nodeId, targetIndex) => {
-    const lookup = findParentOfNode(doc, nodeId);
+exports.reparentNode = reparentNode;
+const reorderNodeWithinParent = (doc, nodeId, targetIndex) => {
+    const lookup = (0, exports.findParentOfNode)(doc, nodeId);
     if (!lookup) {
         return null;
     }
@@ -131,7 +142,8 @@ export const reorderNodeWithinParent = (doc, nodeId, targetIndex) => {
         toIndex: boundedIndex
     };
 };
-export const visibleNodes = (root) => {
+exports.reorderNodeWithinParent = reorderNodeWithinParent;
+const visibleNodes = (root) => {
     const output = [];
     const walk = (node) => {
         output.push(node);
@@ -142,7 +154,8 @@ export const visibleNodes = (root) => {
     walk(root);
     return output;
 };
-export const visibleEdges = (root) => {
+exports.visibleNodes = visibleNodes;
+const visibleEdges = (root) => {
     const output = [];
     const walk = (node) => {
         if (node.collapsed) {
@@ -156,4 +169,5 @@ export const visibleEdges = (root) => {
     walk(root);
     return output;
 };
+exports.visibleEdges = visibleEdges;
 //# sourceMappingURL=store.js.map

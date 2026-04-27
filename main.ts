@@ -170,7 +170,7 @@ export default class MindmapPlugin extends Plugin {
       finalPath,
       JSON.stringify(createDefaultMindmap(), null, 2)
     );
-    new Notice(`已创建导图：${newFile.path}`);
+    // new Notice(`已创建导图：${newFile.path}`);
     this.logTabDebug("create-mindmap-file", { file: newFile.path, folder: folder?.path ?? "" });
     await this.openMindmapFile(newFile);
   }

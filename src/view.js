@@ -1,17 +1,132 @@
-import { ItemView, MarkdownRenderer, Menu, Notice, Platform, TFile, normalizePath } from "obsidian";
-import { addChildNode, findNodeById, findParentOfNode, normalizeMindmapDocument, removeNode, reorderNodeWithinParent, reparentNode, visibleNodes } from "./store";
-export const MINDMAP_VIEW_TYPE = "mindmap-view";
-export class MindmapView extends ItemView {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MindmapView = exports.MINDMAP_VIEW_TYPE = void 0;
+const state_1 = require("@codemirror/state");
+const view_1 = require("@codemirror/view");
+const commands_1 = require("@codemirror/commands");
+const language_1 = require("@codemirror/language");
+const lang_markdown_1 = require("@codemirror/lang-markdown");
+const search_1 = require("@codemirror/search");
+const obsidian_1 = require("obsidian");
+const store_1 = require("./store");
+const types_1 = require("./types");
+const PRIMARY_MINDMAP_EXTENSION = "mindmap";
+const LEGACY_MINDMAP_EXTENSION = "mindmap.json";
+exports.MINDMAP_VIEW_TYPE = "mindmap-view";
+class MindmapAssociationModal extends obsidian_1.Modal {
+    constructor(app, candidates, createInitialTitle, onSelect, onCreate) {
+        super(app);
+        this.candidates = candidates;
+        this.createInitialTitle = createInitialTitle;
+        this.onSelect = onSelect;
+        this.onCreate = onCreate;
+        this.query = "";
+    }
+    onOpen() {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("mindmap-association-modal");
+        contentEl.createEl("h2", { text: "关联导图" });
+        this.inputEl = contentEl.createEl("input", {
+            cls: "mindmap-association-search",
+            type: "text"
+        });
+        this.inputEl.placeholder = "输入导图名称或路径进行筛选，未找到可快速创建";
+        this.inputEl.value = this.createInitialTitle;
+        this.query = this.createInitialTitle;
+        this.createButtonEl = contentEl.createEl("button", {
+            cls: "mindmap-association-create-button",
+            text: "快速创建并关联"
+        });
+        this.createButtonEl.type = "button";
+        this.createButtonEl.addEventListener("click", () => {
+            void this.createFromQuery();
+        });
+        this.listEl = contentEl.createDiv({ cls: "mindmap-association-list" });
+        this.inputEl.addEventListener("input", () => {
+            this.query = this.inputEl.value.trim();
+            this.renderList();
+        });
+        this.inputEl.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                const filtered = this.getFilteredCandidates();
+                if (filtered[0]) {
+                    this.chooseCandidate(filtered[0]);
+                }
+                else {
+                    void this.createFromQuery();
+                }
+            }
+        });
+        this.renderList();
+        window.setTimeout(() => {
+            this.inputEl.focus();
+            this.inputEl.select();
+        }, 0);
+    }
+    onClose() {
+        this.contentEl.empty();
+    }
+    getFilteredCandidates() {
+        const lowerQuery = this.query.toLowerCase();
+        if (!lowerQuery) {
+            return this.candidates;
+        }
+        return this.candidates.filter((candidate) => {
+            return candidate.title.toLowerCase().includes(lowerQuery)
+                || candidate.file.path.toLowerCase().includes(lowerQuery);
+        });
+    }
+    renderList() {
+        this.listEl.empty();
+        const title = this.query || this.createInitialTitle || "新建导图";
+        this.createButtonEl.setText(`快速创建「${title}」并关联`);
+        const filtered = this.getFilteredCandidates();
+        if (filtered.length === 0) {
+            this.listEl.createDiv({ cls: "mindmap-association-empty", text: "没有匹配的导图，可以直接快速创建。" });
+            return;
+        }
+        filtered.forEach((candidate) => {
+            const itemEl = this.listEl.createEl("button", { cls: "mindmap-association-item" });
+            itemEl.type = "button";
+            itemEl.createDiv({ cls: "mindmap-association-item-title", text: candidate.title });
+            itemEl.createDiv({ cls: "mindmap-association-item-path", text: candidate.file.path });
+            itemEl.addEventListener("click", () => this.chooseCandidate(candidate));
+        });
+    }
+    chooseCandidate(candidate) {
+        this.onSelect(candidate);
+        this.close();
+    }
+    async createFromQuery() {
+        const title = this.query || this.createInitialTitle || "新建导图";
+        this.createButtonEl.disabled = true;
+        try {
+            await this.onCreate(title);
+            this.close();
+        }
+        finally {
+            this.createButtonEl.disabled = false;
+        }
+    }
+}
+class MindmapView extends obsidian_1.ItemView {
     constructor() {
         super(...arguments);
         this.file = null;
         this.doc = null;
+        this.noteEditorView = null;
+        this.isSyncingNoteEditor = false;
+        this.noteRenderTimer = null;
+        this.noteRenderRequestId = 0;
         this.selectedNodeId = null;
         this.selectedNodeIds = new Set();
         this.editingNodeId = null;
         this.saveTimer = null;
         this.pendingRenderFrame = null;
         this.pendingNodeSelectionTimer = null;
+        this.lastMobileNodeTap = null;
         this.isDragging = false;
         this.dropTargetNodeId = null;
         this.draggingNodeIds = new Set();
@@ -19,7 +134,7 @@ export class MindmapView extends ItemView {
         this.panOffset = { x: 0, y: 0 };
         this.zoomScale = 1;
         this.drawerWidth = MindmapView.DEFAULT_DRAWER_WIDTH;
-        this.isMobileLayout = Platform.isMobile;
+        this.isMobileLayout = obsidian_1.Platform.isMobile;
         this.pinchStartDistance = null;
         this.pinchStartScale = 1;
         this.touchPanStart = null;
@@ -29,15 +144,85 @@ export class MindmapView extends ItemView {
         this.isReloadingFromDisk = false;
         this.blockEdgeSidebarGesture = false;
         this.isZenMode = false;
+        this.shouldForceMobileZenOnNextRender = false;
         this.navigationStack = [];
+        this.undoStack = [];
+        this.redoStack = [];
+        this.isApplyingHistory = false;
+        this.noteHistoryCapturedForSession = false;
+        this.linkHistoryCapturedForSession = false;
         this.shouldCenterOnNextRender = false;
         this.shouldFocusRootOnNextRender = false;
+        this.pendingFocusLinkedFromPath = null;
         this.textMeasureCanvas = document.createElement("canvas");
         this.marqueeSelection = null;
         this.mobileCanvasLongPressTimer = null;
+        this.mobileGlobalActionsLongPressTimer = null;
+        this.suppressNextMobileZenClick = false;
         this.pendingCanvasPanStart = null;
         this.mobileLongPressMarqueeActive = false;
+        this.lastMobileCanvasTap = null;
+        this.mobileTooltipNodeId = null;
+        this.dragGhostPositions = new Map();
         this.onKeydown = (event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+                if (this.shouldIgnoreMindmapShortcuts(event)) {
+                    return;
+                }
+                event.preventDefault();
+                if (event.shiftKey) {
+                    void this.redo();
+                }
+                else {
+                    void this.undo();
+                }
+                return;
+            }
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "e") {
+                if (this.shouldIgnoreMindmapShortcuts(event)) {
+                    return;
+                }
+                event.preventDefault();
+                if (this.drawerEl.hasClass("is-hidden")) {
+                    if (this.selectedNodeId) {
+                        void this.openDrawer(this.selectedNodeId);
+                    }
+                }
+                else {
+                    this.closeDrawer();
+                }
+                return;
+            }
+            if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+                if (this.shouldIgnoreMindmapShortcuts(event)) {
+                    return;
+                }
+                const key = event.key.toLowerCase();
+                if (key === "c") {
+                    if (!this.doc || (!this.selectedNodeId && this.selectedNodeIds.size === 0)) {
+                        return;
+                    }
+                    event.preventDefault();
+                    this.copySelectedNodeSubtrees();
+                    return;
+                }
+                if (key === "x") {
+                    if (!this.doc || (!this.selectedNodeId && this.selectedNodeIds.size === 0)) {
+                        return;
+                    }
+                    event.preventDefault();
+                    void this.cutSelectedNodeSubtrees();
+                    return;
+                }
+                if (key === "v") {
+                    if (!this.doc || !this.selectedNodeId) {
+                        return;
+                    }
+                    event.preventDefault();
+                    this.pasteClipboardSubtreeToNode(this.selectedNodeId);
+                    return;
+                }
+            }
             if (event.key === "Escape" && !this.drawerEl.hasClass("is-hidden")) {
                 event.preventDefault();
                 this.closeDrawer();
@@ -57,7 +242,19 @@ export class MindmapView extends ItemView {
                 event.preventDefault();
                 return;
             }
-            if (!this.doc || !this.selectedNodeId) {
+            if (!this.doc) {
+                return;
+            }
+            if (event.key === "Delete" || event.key === "Backspace") {
+                const rootIds = this.getSelectedOperationRootIds();
+                if (rootIds.length === 0) {
+                    return;
+                }
+                event.preventDefault();
+                void this.deleteSelectedNodeSubtrees();
+                return;
+            }
+            if (!this.selectedNodeId) {
                 return;
             }
             if (event.key === "Tab") {
@@ -70,10 +267,6 @@ export class MindmapView extends ItemView {
                 this.createSiblingNode(this.selectedNodeId);
                 return;
             }
-            if (event.key === "Delete" || event.key === "Backspace") {
-                event.preventDefault();
-                void this.deleteNodeById(this.selectedNodeId);
-            }
         };
         this.onContainerZenTouchStart = (event) => {
             if (!this.isZenMode || !this.isMobileLayout) {
@@ -81,7 +274,7 @@ export class MindmapView extends ItemView {
             }
             const target = event.target;
             if (target instanceof Element &&
-                target.closest(".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+                target.closest(".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
                 return;
             }
             event.stopPropagation();
@@ -93,7 +286,7 @@ export class MindmapView extends ItemView {
             }
             const target = event.target;
             if (target instanceof Element &&
-                target.closest(".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+                target.closest(".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
                 return;
             }
             event.stopPropagation();
@@ -105,7 +298,7 @@ export class MindmapView extends ItemView {
             }
             const target = event.target;
             if (target instanceof Element &&
-                target.closest(".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+                target.closest(".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
                 return;
             }
             event.stopPropagation();
@@ -118,11 +311,10 @@ export class MindmapView extends ItemView {
             const target = event.target;
             if (target instanceof Element && target.closest(".mindmap-canvas")) {
                 event.stopPropagation();
-                event.preventDefault();
-                this.handleZenCanvasTouchStart(event);
+                this.onTouchStart(event, true);
                 return;
             }
-            if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+            if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
                 return;
             }
             event.stopPropagation();
@@ -135,11 +327,10 @@ export class MindmapView extends ItemView {
             const target = event.target;
             if (target instanceof Element && target.closest(".mindmap-canvas")) {
                 event.stopPropagation();
-                event.preventDefault();
-                this.handleZenCanvasTouchMove(event);
+                this.onTouchMove(event, true);
                 return;
             }
-            if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+            if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
                 return;
             }
             event.stopPropagation();
@@ -152,11 +343,10 @@ export class MindmapView extends ItemView {
             const target = event.target;
             if (target instanceof Element && target.closest(".mindmap-canvas")) {
                 event.stopPropagation();
-                event.preventDefault();
-                this.handleZenCanvasTouchEnd(event);
+                this.onTouchEnd(event, true);
                 return;
             }
-            if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+            if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
                 return;
             }
             event.stopPropagation();
@@ -176,14 +366,15 @@ export class MindmapView extends ItemView {
             event.preventDefault();
             if (event.ctrlKey || event.metaKey) {
                 this.zoomAt(event.clientX, event.clientY, -event.deltaY * 0.0015);
+                this.updateViewportTransform();
                 return;
             }
             this.panOffset.x -= event.deltaX;
             this.panOffset.y -= event.deltaY;
-            this.renderMindmap();
+            this.updateViewportTransform();
         };
-        this.onTouchStart = (event) => {
-            if (this.isZenMode && this.isMobileLayout) {
+        this.onTouchStart = (event, allowInZenMode = false) => {
+            if (this.isZenMode && this.isMobileLayout && !allowInZenMode) {
                 return;
             }
             const first = event.touches.item(0);
@@ -206,6 +397,7 @@ export class MindmapView extends ItemView {
             }
             this.blockEdgeSidebarGesture = this.isZenMode;
             const target = event.target;
+            const startedOnNode = target instanceof Element && !!target.closest(".mindmap-node-group");
             if (target instanceof Element) {
                 const isInteractiveControl = !!target.closest(".mindmap-collapse-group, .mindmap-jump-group, .mindmap-mobile-action-cluster, .mindmap-drawer");
                 if (isInteractiveControl) {
@@ -214,7 +406,7 @@ export class MindmapView extends ItemView {
                     this.pendingCanvasPanStart = null;
                     return;
                 }
-                if (target.closest(".mindmap-node-group, .mindmap-resize-handle")) {
+                if (target.closest(".mindmap-resize-handle")) {
                     this.clearMobileCanvasLongPressTimer();
                     this.touchPanStart = null;
                     this.pendingCanvasPanStart = null;
@@ -231,8 +423,14 @@ export class MindmapView extends ItemView {
                 x: first.clientX,
                 y: first.clientY,
                 panX: this.panOffset.x,
-                panY: this.panOffset.y
+                panY: this.panOffset.y,
+                startedAt: Date.now(),
+                startedOnNode
             };
+            if (startedOnNode) {
+                this.clearMobileCanvasLongPressTimer();
+                return;
+            }
             const startPoint = this.getDocumentPoint(first.clientX, first.clientY);
             this.clearMobileCanvasLongPressTimer();
             this.mobileCanvasLongPressTimer = window.setTimeout(() => {
@@ -240,8 +438,8 @@ export class MindmapView extends ItemView {
                 this.beginSelectionMarquee(startPoint.x, startPoint.y);
             }, 360);
         };
-        this.onTouchMove = (event) => {
-            if (this.isZenMode && this.isMobileLayout) {
+        this.onTouchMove = (event, allowInZenMode = false) => {
+            if (this.isZenMode && this.isMobileLayout && !allowInZenMode) {
                 return;
             }
             const first = event.touches.item(0);
@@ -255,8 +453,9 @@ export class MindmapView extends ItemView {
                 }
                 const centerX = (first.clientX + second.clientX) / 2;
                 const centerY = (first.clientY + second.clientY) / 2;
-                const nextScale = Math.min(2.8, Math.max(0.4, this.pinchStartScale * (nextDistance / this.pinchStartDistance)));
+                const nextScale = Math.min(MindmapView.MAX_ZOOM_SCALE, Math.max(MindmapView.MIN_ZOOM_SCALE, this.pinchStartScale * (nextDistance / this.pinchStartDistance)));
                 this.setZoomAt(centerX, centerY, nextScale);
+                this.updateViewportTransform();
                 return;
             }
             if (this.blockEdgeSidebarGesture) {
@@ -271,7 +470,7 @@ export class MindmapView extends ItemView {
                     currentX: point.x,
                     currentY: point.y
                 };
-                this.renderMindmap();
+                this.updateMarqueeOverlay();
                 return;
             }
             if (!first) {
@@ -280,7 +479,13 @@ export class MindmapView extends ItemView {
             if (this.pendingCanvasPanStart) {
                 const distance = Math.hypot(first.clientX - this.pendingCanvasPanStart.x, first.clientY - this.pendingCanvasPanStart.y);
                 if (distance > 10) {
+                    const shouldPreferNodeDrag = this.pendingCanvasPanStart.startedOnNode
+                        && Date.now() - this.pendingCanvasPanStart.startedAt >= MindmapView.MOBILE_NODE_DRAG_LONG_PRESS_DELAY;
                     this.clearMobileCanvasLongPressTimer();
+                    if (shouldPreferNodeDrag) {
+                        this.pendingCanvasPanStart = null;
+                        return;
+                    }
                     this.touchPanStart = this.pendingCanvasPanStart;
                     this.pendingCanvasPanStart = null;
                 }
@@ -291,15 +496,34 @@ export class MindmapView extends ItemView {
             event.preventDefault();
             this.panOffset.x = this.touchPanStart.panX + (first.clientX - this.touchPanStart.x);
             this.panOffset.y = this.touchPanStart.panY + (first.clientY - this.touchPanStart.y);
-            this.renderMindmap();
+            this.updateViewportTransform();
         };
-        this.onTouchEnd = () => {
-            if (this.isZenMode && this.isMobileLayout) {
+        this.onTouchEnd = (event, allowInZenMode = false) => {
+            if (this.isZenMode && this.isMobileLayout && !allowInZenMode) {
                 return;
             }
+            const hadPendingCanvasTap = !!this.pendingCanvasPanStart;
+            const pendingCanvasStartedOnNode = this.pendingCanvasPanStart?.startedOnNode ?? false;
+            const hadActivePan = !!this.touchPanStart;
             this.clearMobileCanvasLongPressTimer();
             if (this.mobileLongPressMarqueeActive) {
                 this.finishSelectionMarquee();
+                this.lastMobileCanvasTap = null;
+            }
+            else if (this.isMobileLayout && event.changedTouches.length === 1 && !hadActivePan && hadPendingCanvasTap && !pendingCanvasStartedOnNode) {
+                const touch = event.changedTouches.item(0);
+                if (touch) {
+                    const centered = this.handleMobileCanvasDoubleTap(touch.clientX, touch.clientY);
+                    if (centered) {
+                        event.preventDefault();
+                    }
+                    else {
+                        this.clearCanvasSelection();
+                    }
+                }
+            }
+            else if (hadActivePan) {
+                this.lastMobileCanvasTap = null;
             }
             this.pinchStartDistance = null;
             this.touchPanStart = null;
@@ -325,12 +549,7 @@ export class MindmapView extends ItemView {
             const startClient = { x: event.clientX, y: event.clientY };
             let marqueeStarted = false;
             const clearSelection = () => {
-                if (this.selectedNodeId !== null || this.editingNodeId !== null || this.selectedNodeIds.size > 0) {
-                    this.selectedNodeId = null;
-                    this.selectedNodeIds.clear();
-                    this.editingNodeId = null;
-                    this.renderMindmap();
-                }
+                this.clearCanvasSelection();
             };
             const finishMarquee = () => {
                 if (!this.doc || !this.marqueeSelection) {
@@ -391,7 +610,7 @@ export class MindmapView extends ItemView {
                 return;
             }
             event.preventDefault();
-            this.centerViewportOnRoot(this.doc.root, visibleNodes(this.doc.root));
+            this.centerViewportOnRoot(this.doc.root, (0, store_1.visibleNodes)(this.doc.root));
             this.renderMindmap();
         };
     }
@@ -419,11 +638,507 @@ export class MindmapView extends ItemView {
     focusContainerWithoutScroll() {
         this.containerEl.focus({ preventScroll: true });
     }
+    isDirectLinkOpenGesture(event) {
+        return (event.metaKey || event.ctrlKey) && event.altKey;
+    }
+    cloneDocument(doc) {
+        return JSON.parse(JSON.stringify(doc));
+    }
+    cloneNode(node) {
+        return JSON.parse(JSON.stringify(node));
+    }
+    getClipboardPayload() {
+        try {
+            const raw = window.localStorage.getItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY);
+            if (!raw) {
+                return null;
+            }
+            const parsed = JSON.parse(raw);
+            if (parsed.version !== 1 || (!parsed.subtree && !parsed.forest?.length)) {
+                return null;
+            }
+            const forest = Array.isArray(parsed.forest)
+                ? parsed.forest.map((node) => this.cloneNode(node))
+                : parsed.subtree
+                    ? [this.cloneNode(parsed.subtree)]
+                    : [];
+            if (forest.length === 0) {
+                return null;
+            }
+            return {
+                version: 1,
+                sourcePath: typeof parsed.sourcePath === "string" ? parsed.sourcePath : null,
+                subtree: forest[0],
+                forest,
+                operation: parsed.operation === "cut" ? "cut" : "copy"
+            };
+        }
+        catch {
+            return null;
+        }
+    }
+    hasClipboardSubtree() {
+        return !!this.getClipboardPayload();
+    }
+    writeClipboardPayload(node, operation) {
+        this.writeClipboardForest([node], operation);
+    }
+    writeClipboardForest(nodes, operation) {
+        const forest = nodes.map((node) => this.cloneNode(node));
+        const payload = {
+            version: 1,
+            sourcePath: this.file?.path ?? null,
+            subtree: forest[0],
+            forest,
+            operation
+        };
+        window.localStorage.setItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY, JSON.stringify(payload));
+    }
+    getSelectedOperationRootIds() {
+        if (!this.doc) {
+            return [];
+        }
+        const selectedIds = this.selectedNodeIds.size > 0
+            ? Array.from(this.selectedNodeIds)
+            : this.selectedNodeId
+                ? [this.selectedNodeId]
+                : [];
+        const existingSelectedIds = selectedIds.filter((id) => !!(0, store_1.findNodeById)(this.doc, id));
+        return existingSelectedIds.filter((id) => {
+            const lookup = (0, store_1.findParentOfNode)(this.doc, id);
+            return !lookup || !existingSelectedIds.includes(lookup.parent.id);
+        });
+    }
+    copySelectedNodeSubtrees() {
+        if (!this.doc) {
+            return;
+        }
+        const rootIds = this.getSelectedOperationRootIds();
+        if (rootIds.length === 0) {
+            return;
+        }
+        const nodes = rootIds
+            .map((id) => (0, store_1.findNodeById)(this.doc, id))
+            .filter((node) => !!node);
+        if (nodes.length === 0) {
+            return;
+        }
+        this.writeClipboardForest(nodes, "copy");
+        // new Notice(nodes.length === 1
+        //  ?`已复制节点「${nodes[0].title}」及其子树`
+        //  : `已复制 ${nodes.length} 个节点子树`);
+        this.updateMobileActionButtons();
+    }
+    copyNodeSubtree(nodeId) {
+        if (!this.doc) {
+            return;
+        }
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
+        if (!node) {
+            return;
+        }
+        this.writeClipboardPayload(node, "copy");
+        // new Notice(`已复制节点「${node.title}」及其子树`);
+        this.updateMobileActionButtons();
+    }
+    reassignSubtreeIds(node) {
+        const cloned = this.cloneNode(node);
+        const walk = (current) => {
+            current.id = crypto.randomUUID();
+            current.children.forEach(walk);
+        };
+        walk(cloned);
+        return cloned;
+    }
+    pasteSubtreeIntoParent(parent, subtree) {
+        const inserted = this.reassignSubtreeIds(subtree);
+        inserted.x = parent.x + 180;
+        inserted.y = parent.y + (parent.children.length + 1) * 56;
+        parent.children.push(inserted);
+        parent.collapsed = false;
+        return inserted;
+    }
+    async cutSelectedNodeSubtrees() {
+        if (!this.doc) {
+            return;
+        }
+        const rootIds = this.getSelectedOperationRootIds();
+        if (rootIds.length === 0) {
+            return;
+        }
+        if (rootIds.includes(this.doc.root.id)) {
+            // new Notice("根节点不可剪切");
+            return;
+        }
+        const nodes = rootIds
+            .map((id) => (0, store_1.findNodeById)(this.doc, id))
+            .filter((node) => !!node);
+        if (nodes.length === 0) {
+            return;
+        }
+        const accepted = window.confirm(nodes.length === 1
+            ? `确认剪切节点「${nodes[0].title}」及其全部子孙节点吗？`
+            : `确认剪切这 ${nodes.length} 个节点及其全部子孙节点吗？`);
+        if (!accepted) {
+            return;
+        }
+        const snapshotBeforeCut = this.cloneDocument(this.doc);
+        this.writeClipboardForest(nodes, "cut");
+        const affectedParentIds = new Set();
+        rootIds.forEach((nodeId) => {
+            const parentLookup = (0, store_1.findParentOfNode)(this.doc, nodeId);
+            if (parentLookup) {
+                affectedParentIds.add(parentLookup.parent.id);
+            }
+            (0, store_1.removeNode)(this.doc, nodeId);
+        });
+        this.pushHistoryState(snapshotBeforeCut);
+        const fallbackSelectionId = Array.from(affectedParentIds)[0] ?? this.doc.root.id;
+        this.selectedNodeId = fallbackSelectionId;
+        this.selectedNodeIds = new Set([fallbackSelectionId]);
+        this.editingNodeId = null;
+        if (!this.drawerEl.hasClass("is-hidden")) {
+            await this.syncOpenDrawerWithSelection();
+        }
+        this.closeMobileNodeTooltip();
+        this.playNodeActionSound("delete");
+        this.normalizeLayoutKeepingNodePosition(fallbackSelectionId);
+        this.requestSave();
+        this.updateMobileActionButtons();
+        this.updateMobileActionClusterVisibility();
+        this.renderMindmap();
+        // new Notice(nodes.length === 1 ? "已剪切节点，可粘贴到任意导图节点下" : `已剪切 ${nodes.length} 个节点，可粘贴到任意导图节点下`);
+    }
+    async cutNodeSubtree(nodeId) {
+        if (!this.doc) {
+            return;
+        }
+        if (nodeId === this.doc.root.id) {
+            // new Notice("根节点不可剪切");
+            return;
+        }
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
+        const parentLookup = (0, store_1.findParentOfNode)(this.doc, nodeId);
+        if (!node || !parentLookup) {
+            return;
+        }
+        const accepted = window.confirm(`确认剪切节点「${node.title}」及其全部子孙节点吗？`);
+        if (!accepted) {
+            return;
+        }
+        const snapshotBeforeCut = this.cloneDocument(this.doc);
+        this.writeClipboardPayload(node, "cut");
+        const result = (0, store_1.removeNode)(this.doc, nodeId);
+        if (!result) {
+            // new Notice("剪切失败：未找到节点");
+            return;
+        }
+        this.pushHistoryState(snapshotBeforeCut);
+        this.selectedNodeId = result.parent.id;
+        this.selectedNodeIds = new Set([result.parent.id]);
+        this.editingNodeId = null;
+        if (!this.drawerEl.hasClass("is-hidden")) {
+            await this.syncOpenDrawerWithSelection();
+        }
+        this.closeMobileNodeTooltip();
+        this.playNodeActionSound("delete");
+        this.normalizeLayoutKeepingNodePosition(result.parent.id);
+        this.requestSave();
+        this.updateMobileActionButtons();
+        this.updateMobileActionClusterVisibility();
+        this.renderMindmap();
+        // new Notice("已剪切节点，可粘贴到任意导图节点下");
+    }
+    deleteSelectedNodeSubtrees() {
+        if (!this.doc) {
+            return Promise.resolve();
+        }
+        const rootIds = this.getSelectedOperationRootIds();
+        if (rootIds.length === 0) {
+            return Promise.resolve();
+        }
+        if (rootIds.includes(this.doc.root.id)) {
+            // new Notice("根节点不可删除");
+            return Promise.resolve();
+        }
+        const nodes = rootIds
+            .map((id) => (0, store_1.findNodeById)(this.doc, id))
+            .filter((node) => !!node);
+        if (nodes.length === 0) {
+            return Promise.resolve();
+        }
+        const accepted = window.confirm(nodes.length === 1
+            ? `确认删除节点「${nodes[0].title}」及其全部子孙节点吗？`
+            : `确认删除这 ${nodes.length} 个节点及其全部子孙节点吗？`);
+        if (!accepted) {
+            return Promise.resolve();
+        }
+        const snapshotBeforeDelete = this.cloneDocument(this.doc);
+        const affectedParentIds = new Set();
+        rootIds.forEach((nodeId) => {
+            const parentLookup = (0, store_1.findParentOfNode)(this.doc, nodeId);
+            if (parentLookup) {
+                affectedParentIds.add(parentLookup.parent.id);
+            }
+            (0, store_1.removeNode)(this.doc, nodeId);
+        });
+        this.pushHistoryState(snapshotBeforeDelete);
+        const fallbackSelectionId = Array.from(affectedParentIds)[0] ?? this.doc.root.id;
+        this.selectedNodeId = fallbackSelectionId;
+        this.selectedNodeIds = new Set([fallbackSelectionId]);
+        this.editingNodeId = null;
+        if (!this.drawerEl.hasClass("is-hidden")) {
+            return this.syncOpenDrawerWithSelection().then(() => {
+                this.closeMobileNodeTooltip();
+                this.playNodeActionSound("delete");
+                this.normalizeLayoutKeepingNodePosition(fallbackSelectionId);
+                this.requestSave();
+                this.updateMobileActionButtons();
+                this.updateMobileActionClusterVisibility();
+                this.renderMindmap();
+                // new Notice(nodes.length === 1 ? "已删除节点" : `已删除 ${nodes.length} 个节点`);
+            });
+        }
+        this.closeMobileNodeTooltip();
+        this.playNodeActionSound("delete");
+        this.normalizeLayoutKeepingNodePosition(fallbackSelectionId);
+        this.requestSave();
+        this.updateMobileActionButtons();
+        this.updateMobileActionClusterVisibility();
+        this.renderMindmap();
+        // new Notice(nodes.length === 1 ? "已删除节点" : `已删除 ${nodes.length} 个节点`);
+        return Promise.resolve();
+    }
+    pasteClipboardSubtreeToNode(parentId) {
+        if (!this.doc) {
+            return;
+        }
+        const payload = this.getClipboardPayload();
+        if (!payload) {
+            // new Notice("剪贴板里没有可粘贴的节点");
+            return;
+        }
+        const parent = (0, store_1.findNodeById)(this.doc, parentId);
+        if (!parent) {
+            // new Notice("未找到粘贴目标节点");
+            return;
+        }
+        const snapshotBeforePaste = this.cloneDocument(this.doc);
+        const forest = payload.forest?.length ? payload.forest : [payload.subtree];
+        const insertedNodes = forest.map((subtree) => this.pasteSubtreeIntoParent(parent, subtree));
+        this.pushHistoryState(snapshotBeforePaste);
+        const selectedInsertedIds = insertedNodes.map((node) => node.id);
+        this.selectedNodeId = selectedInsertedIds[0] ?? null;
+        this.selectedNodeIds = new Set(selectedInsertedIds);
+        this.closeMobileNodeTooltip();
+        this.playNodeActionSound("add");
+        this.normalizeLayoutKeepingNodePosition(parent.id);
+        this.requestSave();
+        this.updateMobileActionButtons();
+        this.updateMobileActionClusterVisibility();
+        this.renderMindmap();
+        // new Notice(forest.length === 1
+        //  ?`已将${payload.operation === "cut" ? "剪切" : "复制"}内容粘贴到「${parent.title}」下`
+        //  : `已将 ${forest.length} 个${payload.operation === "cut" ? "剪切" : "复制"}节点粘贴到「${parent.title}」下`);
+    }
+    captureHistorySnapshot() {
+        if (!this.doc || this.isApplyingHistory) {
+            return;
+        }
+        this.pushHistoryState(this.doc);
+    }
+    pushHistoryState(snapshot) {
+        if (this.isApplyingHistory) {
+            return;
+        }
+        this.undoStack.push(this.cloneDocument(snapshot));
+        if (this.undoStack.length > 100) {
+            this.undoStack.shift();
+        }
+        this.redoStack = [];
+        this.updateMobileActionButtons();
+    }
+    syncSelectionAfterHistoryApply() {
+        if (!this.doc) {
+            this.selectedNodeId = null;
+            this.selectedNodeIds.clear();
+            this.editingNodeId = null;
+            if (!this.drawerEl.hasClass("is-hidden")) {
+                this.closeDrawer();
+            }
+            return;
+        }
+        if (!this.selectedNodeId || !(0, store_1.findNodeById)(this.doc, this.selectedNodeId)) {
+            this.selectedNodeId = this.doc.root.id;
+        }
+        const nextSelectedIds = new Set();
+        this.selectedNodeIds.forEach((id) => {
+            if ((0, store_1.findNodeById)(this.doc, id)) {
+                nextSelectedIds.add(id);
+            }
+        });
+        if (nextSelectedIds.size === 0 && this.selectedNodeId) {
+            nextSelectedIds.add(this.selectedNodeId);
+        }
+        this.selectedNodeIds = nextSelectedIds;
+        if (this.editingNodeId && !(0, store_1.findNodeById)(this.doc, this.editingNodeId)) {
+            this.editingNodeId = null;
+        }
+    }
+    async applyHistoryState(nextDoc) {
+        this.doc = (0, store_1.normalizeMindmapDocument)(this.cloneDocument(nextDoc));
+        this.normalizeLayout();
+        this.refreshTabTitle();
+        this.syncSelectionAfterHistoryApply();
+        this.noteHistoryCapturedForSession = false;
+        this.linkHistoryCapturedForSession = false;
+        await this.syncOpenDrawerWithSelection();
+        this.requestSave();
+        this.renderMindmap();
+        this.updateMobileActionButtons();
+    }
+    async undo() {
+        if (!this.doc || this.undoStack.length === 0) {
+            return;
+        }
+        const previous = this.undoStack.pop();
+        if (!previous) {
+            return;
+        }
+        this.isApplyingHistory = true;
+        try {
+            this.redoStack.push(this.cloneDocument(this.doc));
+            await this.applyHistoryState(previous);
+        }
+        finally {
+            this.isApplyingHistory = false;
+        }
+    }
+    async redo() {
+        if (!this.doc || this.redoStack.length === 0) {
+            return;
+        }
+        const next = this.redoStack.pop();
+        if (!next) {
+            return;
+        }
+        this.isApplyingHistory = true;
+        try {
+            this.undoStack.push(this.cloneDocument(this.doc));
+            await this.applyHistoryState(next);
+        }
+        finally {
+            this.isApplyingHistory = false;
+        }
+    }
+    closeMobileNodeTooltip() {
+        this.mobileTooltipNodeId = null;
+        this.mobileNodeTooltipEl?.addClass("is-hidden");
+        this.mobileActionClusterEl?.addClass("is-hidden");
+    }
+    openMobileNodeTooltip(nodeId) {
+        if (!this.isMobileLayout || !this.doc) {
+            return;
+        }
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
+        if (!node) {
+            return;
+        }
+        const point = this.getCanvasClientPoint(node.x, node.y);
+        const canvasRect = this.canvasEl.getBoundingClientRect();
+        const viewportPadding = 12;
+        const arrowGap = 10;
+        this.mobileTooltipNodeId = nodeId;
+        this.mobileActionClusterEl?.removeClass("is-hidden");
+        this.mobileNodeTooltipEl?.removeClass("is-hidden");
+        this.mobileNodeTooltipEl?.removeClass("is-below");
+        this.mobileNodeTooltipEl?.style.removeProperty("visibility");
+        this.mobileNodeTooltipEl?.style.removeProperty("--mindmap-tooltip-arrow-left");
+        this.mobileNodeTooltipEl.style.visibility = "hidden";
+        this.mobileNodeTooltipEl.style.left = "0px";
+        this.mobileNodeTooltipEl.style.top = "0px";
+        const tooltipWidth = this.mobileNodeTooltipEl.offsetWidth || 160;
+        const tooltipHeight = this.mobileNodeTooltipEl.offsetHeight || 60;
+        const minCenterX = viewportPadding + tooltipWidth / 2;
+        const maxCenterX = Math.max(minCenterX, canvasRect.width - viewportPadding - tooltipWidth / 2);
+        const clampedCenterX = Math.min(Math.max(point.x, minCenterX), maxCenterX);
+        const arrowLeft = Math.min(Math.max(point.x - clampedCenterX + tooltipWidth / 2, 18), tooltipWidth - 18);
+        const preferredTop = point.y - arrowGap;
+        const topSpace = preferredTop - tooltipHeight;
+        const shouldPlaceBelow = topSpace < viewportPadding && point.y + arrowGap + tooltipHeight <= canvasRect.height - viewportPadding;
+        const tooltipTop = shouldPlaceBelow
+            ? Math.min(canvasRect.height - viewportPadding - tooltipHeight, point.y + arrowGap)
+            : Math.max(viewportPadding, preferredTop);
+        this.mobileNodeTooltipEl.style.left = `${clampedCenterX}px`;
+        this.mobileNodeTooltipEl.style.top = `${tooltipTop}px`;
+        this.mobileNodeTooltipEl.style.setProperty("--mindmap-tooltip-arrow-left", `${arrowLeft}px`);
+        this.mobileNodeTooltipEl.toggleClass("is-below", shouldPlaceBelow);
+        this.mobileNodeTooltipEl.style.visibility = "";
+        this.updateMobileActionButtons();
+    }
+    toggleMobileNodeTooltip(nodeId) {
+        if (this.mobileTooltipNodeId === nodeId && !this.mobileNodeTooltipEl?.hasClass("is-hidden")) {
+            this.closeMobileNodeTooltip();
+            return;
+        }
+        this.openMobileNodeTooltip(nodeId);
+    }
+    shouldOpenMobileNodeTooltip(nodeId, now) {
+        return !!this.lastMobileNodeTap
+            && this.lastMobileNodeTap.nodeId === nodeId
+            && now - this.lastMobileNodeTap.time >= MindmapView.MOBILE_NODE_TOOLTIP_REOPEN_DELAY;
+    }
+    handleMobileUndoButtonClick() {
+        void this.undo();
+    }
     clearMobileCanvasLongPressTimer() {
         if (this.mobileCanvasLongPressTimer !== null) {
             window.clearTimeout(this.mobileCanvasLongPressTimer);
             this.mobileCanvasLongPressTimer = null;
         }
+    }
+    clearMobileGlobalActionsLongPress() {
+        if (this.mobileGlobalActionsLongPressTimer !== null) {
+            window.clearTimeout(this.mobileGlobalActionsLongPressTimer);
+            this.mobileGlobalActionsLongPressTimer = null;
+        }
+    }
+    expandMobileGlobalActions() {
+        if (!this.isMobileLayout) {
+            return;
+        }
+        this.mobileGlobalActionClusterEl?.addClass("is-expanded");
+        this.mobileUndoButtonEl?.removeClass("is-hidden");
+        this.mobileRedoButtonEl?.removeClass("is-hidden");
+        this.mobileRootButtonEl?.removeClass("is-hidden");
+        this.mobileRootButtonEl?.removeAttribute("hidden");
+        if (this.mobileRootButtonEl) {
+            this.mobileRootButtonEl.disabled = false;
+            this.mobileRootButtonEl.title = "回到 root.mindmap";
+            this.mobileRootButtonEl.setAttribute("aria-disabled", "false");
+        }
+    }
+    collapseMobileGlobalActions() {
+        if (!this.isMobileLayout) {
+            return;
+        }
+        this.clearMobileGlobalActionsLongPress();
+        this.mobileGlobalActionClusterEl?.removeClass("is-expanded");
+        this.mobileUndoButtonEl?.addClass("is-hidden");
+        this.mobileRedoButtonEl?.addClass("is-hidden");
+        this.mobileRootButtonEl?.addClass("is-hidden");
+    }
+    startMobileGlobalActionsLongPress() {
+        if (!this.isMobileLayout) {
+            return;
+        }
+        this.clearMobileGlobalActionsLongPress();
+        this.mobileGlobalActionsLongPressTimer = window.setTimeout(() => {
+            this.mobileGlobalActionsLongPressTimer = null;
+            this.suppressNextMobileZenClick = true;
+            this.expandMobileGlobalActions();
+            navigator.vibrate?.(10);
+        }, 380);
     }
     beginSelectionMarquee(startX, startY) {
         this.marqueeSelection = {
@@ -478,7 +1193,7 @@ export class MindmapView extends ItemView {
         if (!this.isMobileLayout || !this.isZenMode) {
             return;
         }
-        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
+        const activeView = this.app.workspace.getActiveViewOfType(obsidian_1.ItemView);
         if (activeView !== this) {
             this.setZenMode(false);
         }
@@ -487,7 +1202,9 @@ export class MindmapView extends ItemView {
         const first = event.touches.item(0);
         const second = event.touches.item(1);
         if (first && second) {
+            this.clearMobileCanvasLongPressTimer();
             this.touchPanStart = null;
+            this.pendingCanvasPanStart = null;
             this.blockEdgeSidebarGesture = false;
             this.zenTapCandidate = null;
             this.pinchStartDistance = this.getTouchDistance(first, second);
@@ -495,6 +1212,7 @@ export class MindmapView extends ItemView {
             return;
         }
         if (!first) {
+            this.clearMobileCanvasLongPressTimer();
             this.pinchStartDistance = null;
             this.zenTapCandidate = null;
             return;
@@ -503,15 +1221,19 @@ export class MindmapView extends ItemView {
         if (target instanceof Element) {
             const isInteractiveControl = !!target.closest(".mindmap-jump-group, .mindmap-mobile-action-cluster, .mindmap-drawer");
             if (isInteractiveControl) {
+                this.clearMobileCanvasLongPressTimer();
                 this.touchPanStart = null;
+                this.pendingCanvasPanStart = null;
                 this.zenTapCandidate = null;
                 return;
             }
             const collapseGroup = target.closest(".mindmap-collapse-group");
             if (collapseGroup) {
+                this.clearMobileCanvasLongPressTimer();
                 const nodeGroup = collapseGroup.closest(".mindmap-node-group");
                 const nodeId = nodeGroup?.dataset.id ?? null;
                 this.touchPanStart = null;
+                this.pendingCanvasPanStart = null;
                 this.pinchStartDistance = null;
                 this.zenTapCandidate = {
                     nodeId,
@@ -524,8 +1246,17 @@ export class MindmapView extends ItemView {
             }
             const nodeGroup = target.closest(".mindmap-node-group");
             if (nodeGroup) {
+                this.clearMobileCanvasLongPressTimer();
                 const nodeId = nodeGroup.dataset.id ?? null;
                 this.touchPanStart = null;
+                this.pendingCanvasPanStart = {
+                    x: first.clientX,
+                    y: first.clientY,
+                    panX: this.panOffset.x,
+                    panY: this.panOffset.y,
+                    startedAt: Date.now(),
+                    startedOnNode: true
+                };
                 this.pinchStartDistance = null;
                 this.zenTapCandidate = {
                     nodeId,
@@ -540,17 +1271,27 @@ export class MindmapView extends ItemView {
         this.blockEdgeSidebarGesture = true;
         this.pinchStartDistance = null;
         this.zenTapCandidate = null;
-        this.touchPanStart = {
+        this.pendingCanvasPanStart = {
             x: first.clientX,
             y: first.clientY,
             panX: this.panOffset.x,
-            panY: this.panOffset.y
+            panY: this.panOffset.y,
+            startedAt: Date.now(),
+            startedOnNode: false
         };
+        const startPoint = this.getDocumentPoint(first.clientX, first.clientY);
+        this.clearMobileCanvasLongPressTimer();
+        this.mobileCanvasLongPressTimer = window.setTimeout(() => {
+            this.mobileCanvasLongPressTimer = null;
+            this.beginSelectionMarquee(startPoint.x, startPoint.y);
+        }, 360);
     }
+    ;
     handleZenCanvasTouchMove(event) {
         const first = event.touches.item(0);
         const second = event.touches.item(1);
         if (first && second && this.pinchStartDistance !== null) {
+            this.clearMobileCanvasLongPressTimer();
             this.zenTapCandidate = null;
             const nextDistance = this.getTouchDistance(first, second);
             if (nextDistance <= 0) {
@@ -558,7 +1299,7 @@ export class MindmapView extends ItemView {
             }
             const centerX = (first.clientX + second.clientX) / 2;
             const centerY = (first.clientY + second.clientY) / 2;
-            const nextScale = Math.min(2.8, Math.max(0.4, this.pinchStartScale * (nextDistance / this.pinchStartDistance)));
+            const nextScale = Math.min(MindmapView.MAX_ZOOM_SCALE, Math.max(MindmapView.MIN_ZOOM_SCALE, this.pinchStartScale * (nextDistance / this.pinchStartDistance)));
             this.setZoomAt(centerX, centerY, nextScale);
             return;
         }
@@ -568,7 +1309,30 @@ export class MindmapView extends ItemView {
                 this.zenTapCandidate = null;
             }
         }
-        if (!first || !this.touchPanStart) {
+        if (this.mobileLongPressMarqueeActive && first && this.marqueeSelection) {
+            const point = this.getDocumentPoint(first.clientX, first.clientY);
+            this.marqueeSelection = {
+                startX: this.marqueeSelection.startX,
+                startY: this.marqueeSelection.startY,
+                currentX: point.x,
+                currentY: point.y
+            };
+            this.renderMindmap();
+            return;
+        }
+        if (!first) {
+            return;
+        }
+        if (this.pendingCanvasPanStart) {
+            const distance = Math.hypot(first.clientX - this.pendingCanvasPanStart.x, first.clientY - this.pendingCanvasPanStart.y);
+            if (distance > 10) {
+                this.clearMobileCanvasLongPressTimer();
+                this.touchPanStart = this.pendingCanvasPanStart;
+                this.pendingCanvasPanStart = null;
+                this.lastMobileCanvasTap = null;
+            }
+        }
+        if (!this.touchPanStart) {
             return;
         }
         this.panOffset.x = this.touchPanStart.panX + (first.clientX - this.touchPanStart.x);
@@ -601,36 +1365,55 @@ export class MindmapView extends ItemView {
             }
             return;
         }
+        const hadPendingCanvasTap = !!this.pendingCanvasPanStart;
+        const hadActivePan = !!this.touchPanStart;
         const tapCandidate = this.zenTapCandidate;
         this.zenTapCandidate = null;
         this.pinchStartDistance = null;
         this.touchPanStart = null;
+        this.pendingCanvasPanStart = null;
         this.blockEdgeSidebarGesture = true;
-        if (!tapCandidate || !tapCandidate.nodeId || !this.doc) {
+        this.clearMobileCanvasLongPressTimer();
+        if (this.mobileLongPressMarqueeActive) {
+            this.finishSelectionMarquee();
+            this.lastMobileCanvasTap = null;
             return;
         }
-        const node = findNodeById(this.doc, tapCandidate.nodeId);
-        if (!node) {
-            return;
-        }
-        if (tapCandidate.isCollapseToggle) {
-            node.collapsed = !node.collapsed;
-            this.normalizeLayout();
-            this.requestSave();
+        if (tapCandidate?.nodeId && this.doc) {
+            const node = (0, store_1.findNodeById)(this.doc, tapCandidate.nodeId);
+            if (!node) {
+                return;
+            }
+            if (tapCandidate.isCollapseToggle) {
+                node.collapsed = !node.collapsed;
+                this.normalizeLayout();
+                this.requestSave();
+                this.renderMindmap();
+                return;
+            }
+            const now = Date.now();
+            if (this.lastZenNodeTap && this.lastZenNodeTap.nodeId === node.id && now - this.lastZenNodeTap.time <= 320) {
+                this.lastZenNodeTap = null;
+                this.selectedNodeId = node.id;
+                this.startInlineNodeEdit(node.id);
+                return;
+            }
+            this.lastZenNodeTap = { nodeId: node.id, time: now };
+            this.setSingleSelectedNode(node.id);
+            this.focusContainerWithoutScroll();
             this.renderMindmap();
             return;
         }
-        const now = Date.now();
-        if (this.lastZenNodeTap && this.lastZenNodeTap.nodeId === node.id && now - this.lastZenNodeTap.time <= 320) {
-            this.lastZenNodeTap = null;
-            this.selectedNodeId = node.id;
-            this.startInlineNodeEdit(node.id);
+        if (!hadActivePan && hadPendingCanvasTap && event.changedTouches.length === 1) {
+            const touch = event.changedTouches.item(0);
+            if (touch) {
+                this.handleMobileCanvasDoubleTap(touch.clientX, touch.clientY);
+            }
             return;
         }
-        this.lastZenNodeTap = { nodeId: node.id, time: now };
-        this.setSingleSelectedNode(node.id);
-        this.focusContainerWithoutScroll();
-        this.renderMindmap();
+        if (hadActivePan) {
+            this.lastMobileCanvasTap = null;
+        }
     }
     shouldAllowZenGestureTarget(target) {
         if (!(target instanceof Element)) {
@@ -638,10 +1421,28 @@ export class MindmapView extends ItemView {
         }
         return !!target.closest(".mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input");
     }
+    handleMobileCanvasDoubleTap(clientX, clientY) {
+        if (!this.doc) {
+            return false;
+        }
+        const lastTap = this.lastMobileCanvasTap;
+        const now = Date.now();
+        if (lastTap && now - lastTap.time <= 320 && Math.hypot(clientX - lastTap.x, clientY - lastTap.y) <= 18) {
+            this.lastMobileCanvasTap = null;
+            this.centerViewportOnRoot(this.doc.root, (0, store_1.visibleNodes)(this.doc.root));
+            this.updateViewportTransform();
+            return true;
+        }
+        this.lastMobileCanvasTap = { x: clientX, y: clientY, time: now };
+        return false;
+    }
     getViewType() {
-        return MINDMAP_VIEW_TYPE;
+        return exports.MINDMAP_VIEW_TYPE;
     }
     getDisplayText() {
+        if (!this.file && !this.doc) {
+            return "Mindmap";
+        }
         const mindmapTitle = this.doc?.root.title.trim();
         return mindmapTitle && mindmapTitle.length > 0
             ? mindmapTitle
@@ -686,28 +1487,63 @@ export class MindmapView extends ItemView {
         // this.desktopSyncButtonEl = this.desktopActionClusterEl.createEl("button", { cls: "mindmap-desktop-sync-button", text: "同步" });
         // this.desktopSyncButtonEl.type = "button";
         // this.desktopSyncButtonEl.addEventListener("click", () => {
-        //     void this.syncNow();
+        //   void this.syncNow();
         // });
         // this.desktopRefreshButtonEl = this.desktopActionClusterEl.createEl("button", { cls: "mindmap-desktop-refresh-button", text: "刷新" });
         // this.desktopRefreshButtonEl.type = "button";
         // this.desktopRefreshButtonEl.addEventListener("click", () => {
-        //     void this.reloadFromDisk(true);
+        //   void this.reloadFromDisk(true);
+        // });
+        // this.desktopRootButtonEl = this.containerEl.createEl("button", { cls: "mindmap-root-return-button mindmap-desktop-root-button is-hidden", text: "root1" });
+        // this.desktopRootButtonEl.type = "button";
+        // this.desktopRootButtonEl.addEventListener("click", () => {
+        //   void this.openRootMindmap();
         // });
         this.mobileActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-mobile-action-cluster" });
+        this.mobileActionClusterEl.addClass("is-hidden");
+        this.mobileNodeTooltipEl = this.containerEl.createDiv({ cls: "mindmap-mobile-node-tooltip is-hidden" });
+        this.mobileNodeTooltipEl.appendChild(this.mobileActionClusterEl);
+        this.mobileGlobalActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-mobile-global-action-cluster" });
         const mobileActionClusterEl = this.mobileActionClusterEl;
+        const mobileGlobalActionClusterEl = this.mobileGlobalActionClusterEl;
         // 增加“新增节点”按钮
-        this.mobileAddButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-add-button", text: "+" });
+        this.mobileAddButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-add-button", text: "子+" });
         this.mobileAddButtonEl.type = "button";
         this.mobileAddButtonEl.addEventListener("click", () => {
+            this.closeMobileNodeTooltip();
             const targetId = this.selectedNodeId ?? this.doc?.root.id;
             if (targetId) {
                 this.createChildNode(targetId);
             }
         });
+        this.mobileSiblingAddButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sibling-add-button", text: "同+" });
+        this.mobileSiblingAddButtonEl.type = "button";
+        this.mobileSiblingAddButtonEl.addEventListener("click", () => {
+            this.closeMobileNodeTooltip();
+            const targetId = this.selectedNodeId ?? this.doc?.root.id;
+            if (targetId) {
+                this.createSiblingNode(targetId);
+            }
+        });
+        this.mobileUndoButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-undo-button is-hidden", text: "撤回" });
+        this.mobileUndoButtonEl.type = "button";
+        this.mobileUndoButtonEl.addEventListener("click", () => {
+            this.closeMobileNodeTooltip();
+            this.collapseMobileGlobalActions();
+            void this.undo();
+        });
+        this.mobileRedoButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-redo-button is-hidden", text: "重做" });
+        this.mobileRedoButtonEl.type = "button";
+        this.mobileRedoButtonEl.addEventListener("click", () => {
+            this.closeMobileNodeTooltip();
+            this.collapseMobileGlobalActions();
+            void this.redo();
+        });
         // 增加“删除节点”按钮
         this.mobileDeleteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-delete-button", text: "-" });
         this.mobileDeleteButtonEl.type = "button";
         this.mobileDeleteButtonEl.addEventListener("click", () => {
+            this.closeMobileNodeTooltip();
             if (this.selectedNodeId && this.doc && this.selectedNodeId !== this.doc.root.id) {
                 void this.deleteNodeById(this.selectedNodeId);
             }
@@ -715,46 +1551,65 @@ export class MindmapView extends ItemView {
         this.mobileLinkButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-link-button", text: "跳转" });
         this.mobileLinkButtonEl.type = "button";
         this.mobileLinkButtonEl.addEventListener("click", () => {
+            this.closeMobileNodeTooltip();
             if (!this.doc || !this.selectedNodeId) {
                 return;
             }
-            const node = findNodeById(this.doc, this.selectedNodeId);
+            const node = (0, store_1.findNodeById)(this.doc, this.selectedNodeId);
             if (!node?.linkTarget?.trim()) {
                 return;
             }
             this.unlockMobileZenIfNeeded();
             void this.openLinkedTarget(node.linkTarget);
         });
-        this.mobileSyncButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sync-button", text: "同步" });
-        this.mobileSyncButtonEl.type = "button";
-        this.mobileSyncButtonEl.addEventListener("click", () => {
-            void this.syncNow();
-        });
-        this.mobileRefreshButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-refresh-button", text: "刷新" });
-        this.mobileRefreshButtonEl.type = "button";
-        this.mobileRefreshButtonEl.addEventListener("click", () => {
-            void this.reloadFromDisk(true);
-        });
-        this.mobileNoteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-note-button", text: "📋" });
+        // this.mobileSyncButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sync-button", text: "同步" });
+        // this.mobileSyncButtonEl.type = "button";
+        // this.mobileSyncButtonEl.addEventListener("click", () => {
+        //   void this.syncNow();
+        // });
+        // this.mobileRefreshButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-refresh-button", text: "刷新" });
+        // this.mobileRefreshButtonEl.type = "button";
+        // this.mobileRefreshButtonEl.addEventListener("click", () => {
+        //   void this.reloadFromDisk(true);
+        // });
+        this.mobileNoteButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-note-button", text: "笔记" });
         this.mobileNoteButtonEl.type = "button";
         this.mobileNoteButtonEl.addEventListener("click", () => {
+            this.closeMobileNodeTooltip();
             if (this.selectedNodeId) {
                 void this.openDrawer(this.selectedNodeId);
             }
         });
-        this.mobileCenterButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-center-button", text: "⦿" });
-        this.mobileCenterButtonEl.type = "button";
-        this.mobileCenterButtonEl.addEventListener("click", () => {
-            if (!this.doc) {
-                return;
-            }
-            this.centerViewportOnRoot(this.doc.root, visibleNodes(this.doc.root));
-            this.renderMindmap();
-        });
-        this.mobileZenButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-zen-button", text: "锁住" });
+        this.mobileZenButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-zen-button", text: "锁住" });
         this.mobileZenButtonEl.type = "button";
         this.mobileZenButtonEl.addEventListener("click", () => {
+            if (this.suppressNextMobileZenClick) {
+                this.suppressNextMobileZenClick = false;
+                return;
+            }
+            this.collapseMobileGlobalActions();
             this.setZenMode(!this.isZenMode);
+        });
+        this.mobileZenButtonEl.addEventListener("pointerdown", (event) => {
+            if (!this.isMobileLayout || event.pointerType === "mouse") {
+                return;
+            }
+            this.startMobileGlobalActionsLongPress();
+        });
+        this.mobileZenButtonEl.addEventListener("pointerup", () => {
+            this.clearMobileGlobalActionsLongPress();
+        });
+        this.mobileZenButtonEl.addEventListener("pointercancel", () => {
+            this.clearMobileGlobalActionsLongPress();
+        });
+        this.mobileZenButtonEl.addEventListener("pointerleave", () => {
+            this.clearMobileGlobalActionsLongPress();
+        });
+        this.mobileRootButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-root-return-button mindmap-mobile-root-button is-hidden", text: "root" });
+        this.mobileRootButtonEl.type = "button";
+        this.mobileRootButtonEl.addEventListener("click", () => {
+            this.collapseMobileGlobalActions();
+            void this.openRootMindmap();
         });
         this.updateMobileActionButtons();
         this.drawerResizeHandleEl = this.layoutEl.createDiv({ cls: "mindmap-drawer-resize-handle" });
@@ -791,29 +1646,29 @@ export class MindmapView extends ItemView {
         this.drawerCloseEl.addEventListener("click", () => {
             this.closeDrawer();
         });
-        this.nodeTitleInputEl = this.drawerEl.createEl("input", {
-            cls: "mindmap-node-title-input",
-            type: "text"
-        });
-        this.nodeTitleInputEl.placeholder = "节点标题";
-        this.nodeTitleInputEl.addEventListener("input", () => {
-            if (!this.doc || !this.selectedNodeId) {
-                return;
-            }
-            const node = findNodeById(this.doc, this.selectedNodeId);
-            if (!node) {
-                return;
-            }
-            const nextTitle = this.nodeTitleInputEl.value.trim();
-            node.title = nextTitle.length > 0 ? nextTitle : "未命名节点";
-            this.drawerTitleEl.setText(`${node.title}`);
-            if (node.id === this.doc.root.id) {
-                this.refreshTabTitle();
-            }
-            this.normalizeLayout();
-            this.requestSave();
-            this.renderMindmap();
-        });
+        // this.nodeTitleInputEl = this.drawerEl.createEl("input", {
+        //   cls: "mindmap-node-title-input",
+        //   type: "text"
+        // });
+        // this.nodeTitleInputEl.placeholder = "节点标题";
+        // this.nodeTitleInputEl.addEventListener("input", () => {
+        //   if (!this.doc || !this.selectedNodeId) {
+        //     return;
+        //   }
+        //   const node = findNodeById(this.doc, this.selectedNodeId);
+        //   if (!node) {
+        //     return;
+        //   }
+        //   const nextTitle = this.nodeTitleInputEl.value.trim();
+        //   node.title = nextTitle.length > 0 ? nextTitle : "未命名节点";
+        //   this.drawerTitleEl.setText(`${node.title}`);
+        //   if (node.id === this.doc.root.id) {
+        //     this.refreshTabTitle();
+        //   }
+        //   this.normalizeLayoutKeepingNodePosition(node.id);
+        //   this.requestSave();
+        //   this.renderMindmap();
+        // });
         const nodeLinkActionsEl = this.drawerEl.createDiv({ cls: "mindmap-node-link-actions" });
         this.nodeLinkInputEl = nodeLinkActionsEl.createEl("input", {
             cls: "mindmap-node-link-input",
@@ -830,7 +1685,7 @@ export class MindmapView extends ItemView {
             if (!this.doc || !this.selectedNodeId) {
                 return;
             }
-            const node = findNodeById(this.doc, this.selectedNodeId);
+            const node = (0, store_1.findNodeById)(this.doc, this.selectedNodeId);
             if (!node?.linkTarget?.trim()) {
                 return;
             }
@@ -838,12 +1693,16 @@ export class MindmapView extends ItemView {
             void this.openLinkedTarget(node.linkTarget);
         });
         this.nodeLinkInputEl.addEventListener("input", () => {
-            if (!this.doc || !this.selectedNodeId) {
+            if (!this.doc || !this.selectedNodeId || this.selectedNodeId === this.doc.root.id) {
                 return;
             }
-            const node = findNodeById(this.doc, this.selectedNodeId);
+            const node = (0, store_1.findNodeById)(this.doc, this.selectedNodeId);
             if (!node) {
                 return;
+            }
+            if (!this.linkHistoryCapturedForSession) {
+                this.captureHistorySnapshot();
+                this.linkHistoryCapturedForSession = true;
             }
             node.linkTarget = this.nodeLinkInputEl.value.trim();
             this.updateNodeLinkActionButton(node.linkTarget ?? "");
@@ -851,27 +1710,57 @@ export class MindmapView extends ItemView {
             this.renderMindmap();
         });
         this.noteSurfaceEl = this.drawerEl.createDiv({ cls: "mindmap-note-surface" });
+        this.noteEditorHostEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-editor-host" });
         this.noteInputEl = this.noteSurfaceEl.createEl("textarea", {
             cls: "mindmap-note-input"
         });
         this.noteInputEl.placeholder = "使用 Markdown 记录节点笔记...";
+        if (!this.isMobileLayout) {
+            this.noteInputEl.addClass("is-codemirror-backed");
+            this.createNoteEditor();
+        }
+        else {
+            this.noteEditorHostEl.addClass("is-hidden");
+        }
         this.notePreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-preview markdown-preview-view" });
+        this.noteTocEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-toc is-empty is-collapsed" });
+        this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
+        this.noteInputEl.addEventListener("focus", () => {
+            this.updateMobileActionClusterVisibility();
+        });
+        this.noteInputEl.addEventListener("blur", () => {
+            window.setTimeout(() => this.updateMobileActionClusterVisibility(), 0);
+        });
         this.noteInputEl.addEventListener("input", () => {
+            if (!this.isMobileLayout) {
+                return;
+            }
             if (!this.doc || !this.selectedNodeId) {
                 return;
             }
-            const node = findNodeById(this.doc, this.selectedNodeId);
+            const node = (0, store_1.findNodeById)(this.doc, this.selectedNodeId);
             if (!node) {
                 return;
+            }
+            if (!this.noteHistoryCapturedForSession) {
+                this.captureHistorySnapshot();
+                this.noteHistoryCapturedForSession = true;
             }
             node.note = this.noteInputEl.value;
             this.scheduleMarkdownRender(node.note ?? "");
             this.requestSave();
         });
         this.noteInputEl.addEventListener("paste", (event) => {
-            void this.handlePaste(event);
+            if (this.isMobileLayout) {
+                void this.handlePaste(event);
+            }
         });
         this.noteInputEl.addEventListener("keydown", (event) => {
+            if (event.key === "Tab") {
+                event.preventDefault();
+                this.indentNoteSelection(event.shiftKey);
+                return;
+            }
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                 event.preventDefault();
                 this.setNoteEditing(false);
@@ -894,6 +1783,38 @@ export class MindmapView extends ItemView {
                 return;
             }
             void this.reloadFromDisk(false);
+        }));
+        this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+            if (!(file instanceof obsidian_1.TFile) || !this.file) {
+                return;
+            }
+            if (oldPath !== this.file.path) {
+                return;
+            }
+            this.file = file;
+            if (this.doc) {
+                this.doc.selfPath = file.path;
+            }
+            this.refreshTabTitle();
+            void this.syncOpenDrawerWithSelection();
+            this.renderMindmap();
+        }));
+        this.registerEvent(this.app.vault.on("delete", (file) => {
+            if (!(file instanceof obsidian_1.TFile) || !this.file || file.path !== this.file.path) {
+                return;
+            }
+            this.file = null;
+            this.doc = null;
+            this.closeDrawer();
+            this.selectedNodeId = null;
+            this.selectedNodeIds.clear();
+            this.editingNodeId = null;
+            this.mobileTooltipNodeId = null;
+            this.refreshTabTitle();
+            this.renderMindmap();
+            window.setTimeout(() => {
+                void this.leaf.setViewState({ type: "empty" });
+            }, 0);
         }));
         this.registerEvent(this.app.workspace.on("active-leaf-change", () => {
             this.unlockMobileZenWhenViewportChanges();
@@ -932,6 +1853,9 @@ export class MindmapView extends ItemView {
             window.cancelAnimationFrame(this.pendingRenderFrame);
             this.pendingRenderFrame = null;
         }
+        this.cancelPendingMarkdownRender();
+        this.noteEditorView?.destroy();
+        this.noteEditorView = null;
         await this.flushSave();
     }
     async setState(state, result) {
@@ -941,7 +1865,8 @@ export class MindmapView extends ItemView {
         if (!path) {
             return;
         }
-        const duplicateLeaf = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).find((leaf) => {
+        this.pendingFocusLinkedFromPath = nextState.focusLinkedFrom ? (0, obsidian_1.normalizePath)(nextState.focusLinkedFrom) : null;
+        const duplicateLeaf = this.app.workspace.getLeavesOfType(exports.MINDMAP_VIEW_TYPE).find((leaf) => {
             if (leaf === this.leaf) {
                 return false;
             }
@@ -952,21 +1877,28 @@ export class MindmapView extends ItemView {
             return view.getState().file === path;
         });
         if (duplicateLeaf) {
+            const duplicateView = duplicateLeaf.view;
+            if (duplicateView instanceof MindmapView && this.pendingFocusLinkedFromPath) {
+                duplicateView.focusLinkedNodeFromPath(this.pendingFocusLinkedFromPath);
+            }
+            this.pendingFocusLinkedFromPath = null;
             this.app.workspace.revealLeaf(duplicateLeaf);
             await this.leaf.setViewState({ type: "empty" });
             return;
         }
         const file = this.app.vault.getAbstractFileByPath(path);
-        if (!(file instanceof TFile)) {
+        if (!(file instanceof obsidian_1.TFile)) {
             return;
         }
         this.file = file;
         await this.loadFromFile();
+        this.focusLinkedNodeFromPendingPath();
         this.renderMindmap();
     }
     getState() {
         return {
-            file: this.file?.path
+            file: this.file?.path,
+            focusLinkedFrom: this.pendingFocusLinkedFromPath ?? undefined
         };
     }
     setFile(file) {
@@ -975,11 +1907,18 @@ export class MindmapView extends ItemView {
     async loadFromFile() {
         if (!this.file) {
             this.doc = null;
+            if (this.isMobileLayout) {
+                this.setZenMode(false);
+            }
             return;
         }
         try {
             const raw = await this.app.vault.cachedRead(this.file);
-            this.doc = normalizeMindmapDocument(JSON.parse(raw));
+            this.doc = (0, store_1.normalizeMindmapDocument)(JSON.parse(raw));
+            this.undoStack = [];
+            this.redoStack = [];
+            this.noteHistoryCapturedForSession = false;
+            this.linkHistoryCapturedForSession = false;
             this.normalizeLayout();
             this.refreshTabTitle();
             if (!this.doc.selfPath && this.file) {
@@ -988,10 +1927,18 @@ export class MindmapView extends ItemView {
             }
             this.shouldCenterOnNextRender = true;
             this.shouldFocusRootOnNextRender = true;
+            if (this.isMobileLayout) {
+                this.shouldForceMobileZenOnNextRender = true;
+                this.closeDrawer();
+                this.closeMobileNodeTooltip();
+            }
         }
         catch (error) {
-            new Notice(`导图读取失败：${String(error)}`);
+            // new Notice(`导图读取失败：${String(error)}`);
             this.doc = null;
+            if (this.isMobileLayout) {
+                this.setZenMode(false);
+            }
         }
     }
     renderMindmap() {
@@ -1003,37 +1950,16 @@ export class MindmapView extends ItemView {
             this.renderMindmapNow();
         });
     }
-    renderMindmapNow() {
+    updateViewportTransform() {
         if (!this.graphLayerEl) {
             return;
         }
-        this.graphLayerEl.innerHTML = "";
-        this.updateMobileActionButtons();
-        if (!this.doc) {
+        this.graphLayerEl.setAttribute("transform", `translate(${this.panOffset.x}, ${this.panOffset.y}) scale(${this.zoomScale})`);
+    }
+    updateMarqueeOverlay() {
+        if (!this.marqueeEl) {
             return;
         }
-        const nodes = visibleNodes(this.doc.root);
-        if (this.shouldCenterOnNextRender) {
-            if (this.shouldFocusRootOnNextRender) {
-                this.centerViewportOnRoot(this.doc.root, nodes);
-                this.shouldFocusRootOnNextRender = false;
-            }
-            else {
-                this.centerViewportOnNodes(nodes);
-            }
-            this.shouldCenterOnNextRender = false;
-        }
-        this.graphLayerEl.setAttribute("transform", `translate(${this.panOffset.x}, ${this.panOffset.y}) scale(${this.zoomScale})`);
-        const draggingIds = this.draggingNodeIds.size > 0
-            ? new Set(this.draggingNodeIds)
-            : (() => {
-                const draggingRoot = this.isDragging && this.selectedNodeId && this.doc
-                    ? findNodeById(this.doc, this.selectedNodeId)
-                    : null;
-                return draggingRoot
-                    ? new Set(this.collectSubtreeNodes(draggingRoot).map((current) => current.id))
-                    : null;
-            })();
         if (this.marqueeSelection) {
             const rect = this.getMarqueeClientRect(this.marqueeSelection);
             this.marqueeEl.removeClass("is-hidden");
@@ -1045,18 +1971,59 @@ export class MindmapView extends ItemView {
         else {
             this.marqueeEl.addClass("is-hidden");
         }
+    }
+    renderMindmapNow() {
+        if (!this.graphLayerEl) {
+            return;
+        }
+        this.graphLayerEl.innerHTML = "";
+        this.updateMobileActionButtons();
+        this.updateRootReturnButton();
+        if (!this.doc) {
+            return;
+        }
+        const nodes = (0, store_1.visibleNodes)(this.doc.root);
+        if (this.shouldCenterOnNextRender) {
+            if (this.shouldFocusRootOnNextRender) {
+                this.centerViewportOnRoot(this.doc.root, nodes);
+                this.shouldFocusRootOnNextRender = false;
+            }
+            else {
+                this.centerViewportOnNodes(nodes);
+            }
+            this.shouldCenterOnNextRender = false;
+        }
+        if (this.shouldForceMobileZenOnNextRender) {
+            this.shouldForceMobileZenOnNextRender = false;
+            this.setZenMode(true);
+        }
+        this.updateViewportTransform();
+        const draggingIds = this.draggingNodeIds.size > 0
+            ? new Set(this.draggingNodeIds)
+            : (() => {
+                const draggingRoot = this.isDragging && this.selectedNodeId && this.doc
+                    ? (0, store_1.findNodeById)(this.doc, this.selectedNodeId)
+                    : null;
+                return draggingRoot
+                    ? new Set(this.collectSubtreeNodes(draggingRoot).map((current) => current.id))
+                    : null;
+            })();
+        const dragGhostPositions = this.dragGhostPositions;
+        this.updateMarqueeOverlay();
         const drawOrthogonalConnectors = (node) => {
             if (node.collapsed || node.children.length === 0) {
                 return;
             }
             const fromSize = this.ensureNodeSize(node);
-            const parentX = node.x + fromSize.width / 2;
+            const parentPosition = draggingIds?.has(node.id) ? dragGhostPositions.get(node.id) ?? node : node;
+            const parentX = parentPosition.x + fromSize.width / 2;
             if (node.children.length === 1) {
                 const child = node.children[0];
                 const childSize = this.ensureNodeSize(child);
-                const childX = child.x - childSize.width / 2;
+                const childPosition = draggingIds?.has(child.id) ? dragGhostPositions.get(child.id) ?? child : child;
+                const childX = childPosition.x - childSize.width / 2;
                 const directPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-                directPath.setAttribute("d", `M ${parentX} ${node.y} H ${childX}`);
+                directPath.setAttribute("d", `M ${parentX} ${parentPosition.y} H ${childX}`);
                 directPath.classList.add("mindmap-edge");
                 if (draggingIds?.has(node.id) || draggingIds?.has(child.id)) {
                     directPath.classList.add("is-dragging");
@@ -1068,17 +2035,18 @@ export class MindmapView extends ItemView {
             const branchX = parentX + 28;
             const childAnchors = node.children.map((child) => {
                 const childSize = this.ensureNodeSize(child);
+                const childPosition = draggingIds?.has(child.id) ? dragGhostPositions.get(child.id) ?? child : child;
                 return {
                     child,
-                    x: child.x - childSize.width / 2,
-                    y: child.y
+                    x: childPosition.x - childSize.width / 2,
+                    y: childPosition.y
                 };
             });
             const topY = childAnchors[0]?.y;
             const bottomY = childAnchors[childAnchors.length - 1]?.y;
             if (topY !== undefined && bottomY !== undefined) {
-                const trunkStartY = Math.min(node.y, topY, bottomY);
-                const trunkEndY = Math.max(node.y, topY, bottomY);
+                const trunkStartY = Math.min(parentPosition.y, topY, bottomY);
+                const trunkEndY = Math.max(parentPosition.y, topY, bottomY);
                 if (Math.abs(trunkEndY - trunkStartY) > 2) {
                     const trunk = document.createElementNS("http://www.w3.org/2000/svg", "path");
                     trunk.setAttribute("d", `M ${branchX} ${trunkStartY} V ${trunkEndY}`);
@@ -1090,7 +2058,7 @@ export class MindmapView extends ItemView {
                 }
             }
             const parentPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            parentPath.setAttribute("d", `M ${parentX} ${node.y} H ${branchX}`);
+            parentPath.setAttribute("d", `M ${parentX} ${parentPosition.y} H ${branchX}`);
             parentPath.classList.add("mindmap-edge");
             if (draggingIds?.has(node.id) || node.children.some((child) => draggingIds?.has(child.id))) {
                 parentPath.classList.add("is-dragging");
@@ -1108,6 +2076,41 @@ export class MindmapView extends ItemView {
             });
         };
         drawOrthogonalConnectors(this.doc.root);
+        if (draggingIds && dragGhostPositions.size > 0) {
+            nodes
+                .filter((node) => draggingIds.has(node.id))
+                .forEach((node) => {
+                const ghostPosition = dragGhostPositions.get(node.id);
+                if (!ghostPosition) {
+                    return;
+                }
+                const size = this.ensureNodeSize(node);
+                const ghostGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+                ghostGroup.classList.add("mindmap-node-group", "is-drag-ghost");
+                ghostGroup.setAttribute("transform", `translate(${ghostPosition.x}, ${ghostPosition.y})`);
+                const ghostRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                ghostRect.setAttribute("x", String(-size.width / 2));
+                ghostRect.setAttribute("y", String(-size.height / 2));
+                ghostRect.setAttribute("rx", node.id === this.doc?.root.id ? "16" : "10");
+                ghostRect.setAttribute("ry", node.id === this.doc?.root.id ? "16" : "10");
+                ghostRect.setAttribute("width", String(size.width));
+                ghostRect.setAttribute("height", String(size.height));
+                ghostRect.classList.add("mindmap-node", "is-drag-ghost");
+                ghostGroup.appendChild(ghostRect);
+                const ghostTitle = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
+                ghostTitle.setAttribute("x", String(-size.width / 2 + 10));
+                ghostTitle.setAttribute("y", String(-size.height / 2 + 6));
+                ghostTitle.setAttribute("width", String(size.width - 20));
+                ghostTitle.setAttribute("height", String(size.height - 12));
+                const ghostText = document.createElement("div");
+                ghostText.className = "mindmap-node-title is-drag-ghost";
+                ghostText.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+                ghostText.textContent = node.title;
+                ghostTitle.appendChild(ghostText);
+                ghostGroup.appendChild(ghostTitle);
+                this.graphLayerEl.appendChild(ghostGroup);
+            });
+        }
         const nodesToRender = draggingIds
             ? [
                 ...nodes.filter((node) => !draggingIds.has(node.id)),
@@ -1139,7 +2142,8 @@ export class MindmapView extends ItemView {
             if (this.dropTargetNodeId === node.id) {
                 rect.classList.add("is-drop-target");
             }
-            if (this.selectedNodeId === node.id || this.selectedNodeIds.has(node.id)) {
+            const isNodeSelected = this.selectedNodeId === node.id || this.selectedNodeIds.has(node.id);
+            if (isNodeSelected) {
                 rect.classList.add("is-selected");
             }
             group.appendChild(rect);
@@ -1196,6 +2200,7 @@ export class MindmapView extends ItemView {
                 foldGroup.addEventListener("click", (event) => {
                     event.stopPropagation();
                     event.preventDefault();
+                    this.captureHistorySnapshot();
                     node.collapsed = !node.collapsed;
                     this.normalizeLayout();
                     this.requestSave();
@@ -1207,30 +2212,49 @@ export class MindmapView extends ItemView {
                 });
                 group.appendChild(foldGroup);
             }
-            // const resizeHandle = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-            // resizeHandle.setAttribute("x", String(size.width / 2 - 9));
-            // resizeHandle.setAttribute("y", String(size.height / 2 - 9));
-            // resizeHandle.setAttribute("width", "10");
-            // resizeHandle.setAttribute("height", "10");
-            // resizeHandle.setAttribute("rx", "5");
-            // resizeHandle.setAttribute("ry", "5");
-            // resizeHandle.classList.add("mindmap-resize-handle");
-            // resizeHandle.addEventListener("pointerdown", (event) => {
-            //   event.stopPropagation();
-            //   event.preventDefault();
-            //   this.startResize(event, node);
-            // });
-            // group.appendChild(resizeHandle);
+            if (isNodeSelected) {
+                const resizeHandle = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                resizeHandle.setAttribute("x", String(size.width / 2 - 9));
+                resizeHandle.setAttribute("y", String(size.height / 2 - 9));
+                resizeHandle.setAttribute("width", "10");
+                resizeHandle.setAttribute("height", "10");
+                resizeHandle.setAttribute("rx", "5");
+                resizeHandle.setAttribute("ry", "5");
+                resizeHandle.classList.add("mindmap-resize-handle");
+                resizeHandle.addEventListener("pointerdown", (event) => {
+                    event.stopPropagation();
+                    event.preventDefault();
+                    this.startResize(event, node);
+                });
+                group.appendChild(resizeHandle);
+            }
             group.addEventListener("pointerdown", (event) => {
+                if (this.isDirectLinkOpenGesture(event) && !!node.linkTarget?.trim()) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                }
                 this.startDrag(event, node);
             });
             group.addEventListener("click", (event) => {
                 if (event.target instanceof Element && event.target.closest(".mindmap-collapse-group, .mindmap-jump-group")) {
                     return;
                 }
+                if (this.isDirectLinkOpenGesture(event) && !!node.linkTarget?.trim()) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.setSingleSelectedNode(node.id);
+                    this.renderMindmap();
+                    this.unlockMobileZenIfNeeded();
+                    void this.openLinkedTarget(node.linkTarget);
+                    return;
+                }
                 if (this.pendingNodeSelectionTimer) {
                     window.clearTimeout(this.pendingNodeSelectionTimer);
                     this.pendingNodeSelectionTimer = null;
+                }
+                if (this.isMobileLayout) {
+                    return;
                 }
                 if (event.detail >= 2) {
                     event.preventDefault();
@@ -1290,6 +2314,7 @@ export class MindmapView extends ItemView {
             return;
         }
         const selectedRoots = this.getDragRootNodes(node);
+        const snapshotBeforeDrag = this.cloneDocument(this.doc);
         const draggingNodes = this.collectMultipleSubtreeNodes(selectedRoots);
         const draggingNodeIds = new Set(draggingNodes.map((current) => current.id));
         const selectedRootIds = new Set(selectedRoots.map((current) => current.id));
@@ -1301,15 +2326,47 @@ export class MindmapView extends ItemView {
         let siblingSortActive = false;
         const startClient = { x: event.clientX, y: event.clientY };
         const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
+        const isTouchDragCandidate = this.isMobileLayout && event.pointerType !== "mouse";
         let dragStarted = false;
+        let dragArmed = !isTouchDragCandidate;
+        let longPressTimer = null;
+        let longPressHapticFired = false;
+        if (isTouchDragCandidate) {
+            longPressTimer = window.setTimeout(() => {
+                dragArmed = true;
+                if (!longPressHapticFired) {
+                    navigator.vibrate?.(12);
+                    longPressHapticFired = true;
+                }
+            }, MindmapView.MOBILE_NODE_DRAG_LONG_PRESS_DELAY);
+        }
         const onMove = (moveEvent) => {
             const distance = Math.hypot(moveEvent.clientX - startClient.x, moveEvent.clientY - startClient.y);
             if (!dragStarted) {
+                if (isTouchDragCandidate && distance >= 6 && !dragArmed) {
+                    if (longPressTimer !== null) {
+                        window.clearTimeout(longPressTimer);
+                        longPressTimer = null;
+                    }
+                    dragArmed = false;
+                    return;
+                }
                 if (distance < 4) {
                     return;
                 }
+                if (!dragArmed) {
+                    return;
+                }
                 dragStarted = true;
+                if (longPressTimer !== null) {
+                    window.clearTimeout(longPressTimer);
+                    longPressTimer = null;
+                }
                 this.isDragging = true;
+                this.dragGhostPositions = new Map();
+                draggingNodes.forEach((current) => {
+                    this.dragGhostPositions.set(current.id, { x: current.x, y: current.y });
+                });
                 this.draggingNodeIds = draggingNodeIds;
                 this.selectedNodeId = selectedRootIds.has(node.id) ? node.id : selectedRoots[0]?.id ?? node.id;
                 this.selectedNodeIds = new Set(selectedRootIds);
@@ -1332,7 +2389,7 @@ export class MindmapView extends ItemView {
                 current.y = origin.y + deltaY;
             });
             if (selectedRoots.length === 1 && this.doc) {
-                const siblingLookup = findParentOfNode(this.doc, selectedRoots[0].id);
+                const siblingLookup = (0, store_1.findParentOfNode)(this.doc, selectedRoots[0].id);
                 if (siblingLookup) {
                     const siblings = siblingLookup.parent.children;
                     const currentIndex = siblingLookup.index;
@@ -1343,7 +2400,7 @@ export class MindmapView extends ItemView {
                         targetIndex = otherSiblings.length;
                     }
                     if (targetIndex !== currentIndex) {
-                        const reordered = reorderNodeWithinParent(this.doc, selectedRoots[0].id, targetIndex);
+                        const reordered = (0, store_1.reorderNodeWithinParent)(this.doc, selectedRoots[0].id, targetIndex);
                         if (reordered) {
                             const preservedPositions = new Map();
                             draggingNodes.forEach((current) => {
@@ -1352,7 +2409,7 @@ export class MindmapView extends ItemView {
                             siblingSortActive = true;
                             this.selectedNodeId = selectedRoots[0].id;
                             this.selectedNodeIds = new Set([selectedRoots[0].id]);
-                            this.normalizeLayout();
+                            this.normalizeLayoutKeepingNodePosition(this.doc.root.id);
                             draggingNodes.forEach((current) => {
                                 const preserved = preservedPositions.get(current.id);
                                 if (!preserved) {
@@ -1375,23 +2432,46 @@ export class MindmapView extends ItemView {
         const onUp = (upEvent) => {
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerup", onUp);
+            if (longPressTimer !== null) {
+                window.clearTimeout(longPressTimer);
+                longPressTimer = null;
+            }
             if (!dragStarted) {
                 if (this.isMobileLayout &&
                     upEvent.pointerType !== "mouse" &&
                     !(upEvent.target instanceof Element && upEvent.target.closest(".mindmap-collapse-group, .mindmap-jump-group"))) {
-                    this.setSingleSelectedNode(node.id);
-                    this.focusContainerWithoutScroll();
-                    this.renderMindmap();
+                    const now = Date.now();
+                    if (this.lastMobileNodeTap && this.lastMobileNodeTap.nodeId === node.id && now - this.lastMobileNodeTap.time <= 320) {
+                        this.closeMobileNodeTooltip();
+                        this.lastMobileNodeTap = null;
+                        this.setSingleSelectedNode(node.id);
+                        this.startInlineNodeEdit(node.id);
+                    }
+                    else {
+                        const shouldOpenTooltip = this.shouldOpenMobileNodeTooltip(node.id, now);
+                        this.lastMobileNodeTap = { nodeId: node.id, time: now };
+                        this.setSingleSelectedNode(node.id);
+                        this.focusContainerWithoutScroll();
+                        if (shouldOpenTooltip) {
+                            this.openMobileNodeTooltip(node.id);
+                        }
+                        this.renderMindmap();
+                    }
+                }
+                else {
+                    this.lastMobileNodeTap = null;
                 }
                 return;
             }
             this.isDragging = false;
             this.draggingNodeIds = new Set();
+            this.dragGhostPositions = new Map();
             const dropTarget = this.findDropTargetForIds(selectedRootIds);
             this.dropTargetNodeId = null;
             if (dropTarget && this.doc) {
                 const moved = this.reparentMultipleNodes(selectedRoots, dropTarget.id);
                 if (moved) {
+                    this.pushHistoryState(snapshotBeforeDrag);
                     this.selectedNodeIds = new Set(selectedRoots.map((current) => current.id));
                     this.selectedNodeId = selectedRoots[0]?.id ?? null;
                     this.normalizeLayout();
@@ -1401,6 +2481,7 @@ export class MindmapView extends ItemView {
                     return;
                 }
             }
+            this.pushHistoryState(snapshotBeforeDrag);
             this.normalizeLayout();
             this.requestSave();
             void this.syncOpenDrawerWithSelection();
@@ -1432,10 +2513,10 @@ export class MindmapView extends ItemView {
             return [fallbackNode];
         }
         const selectedNodes = Array.from(this.selectedNodeIds)
-            .map((id) => findNodeById(this.doc, id))
+            .map((id) => (0, store_1.findNodeById)(this.doc, id))
             .filter((node) => !!node);
         return selectedNodes.filter((node) => {
-            const parentLookup = findParentOfNode(this.doc, node.id);
+            const parentLookup = (0, store_1.findParentOfNode)(this.doc, node.id);
             return !parentLookup || !this.selectedNodeIds.has(parentLookup.parent.id);
         });
     }
@@ -1448,7 +2529,7 @@ export class MindmapView extends ItemView {
         const top = Math.min(marquee.startY, marquee.currentY);
         const bottom = Math.max(marquee.startY, marquee.currentY);
         const selectedIds = new Set();
-        visibleNodes(this.doc.root).forEach((node) => {
+        (0, store_1.visibleNodes)(this.doc.root).forEach((node) => {
             const size = this.ensureNodeSize(node);
             const nodeLeft = node.x - size.width / 2;
             const nodeRight = node.x + size.width / 2;
@@ -1477,7 +2558,7 @@ export class MindmapView extends ItemView {
         }
         const subtreeIds = new Set();
         movingRootIds.forEach((id) => {
-            const node = findNodeById(this.doc, id);
+            const node = (0, store_1.findNodeById)(this.doc, id);
             if (!node) {
                 return;
             }
@@ -1486,11 +2567,11 @@ export class MindmapView extends ItemView {
         const anchorNodeId = this.selectedNodeId && movingRootIds.has(this.selectedNodeId)
             ? this.selectedNodeId
             : Array.from(movingRootIds)[0] ?? null;
-        const anchorNode = anchorNodeId ? findNodeById(this.doc, anchorNodeId) : null;
+        const anchorNode = anchorNodeId ? (0, store_1.findNodeById)(this.doc, anchorNodeId) : null;
         if (!anchorNode) {
             return null;
         }
-        const candidates = visibleNodes(this.doc.root).filter((node) => !subtreeIds.has(node.id));
+        const candidates = (0, store_1.visibleNodes)(this.doc.root).filter((node) => !subtreeIds.has(node.id));
         let bestTarget = null;
         let bestDistance = Number.POSITIVE_INFINITY;
         candidates.forEach((candidate) => {
@@ -1513,7 +2594,7 @@ export class MindmapView extends ItemView {
         if (!this.doc) {
             return null;
         }
-        const parentLookup = findParentOfNode(this.doc, movingNode.id);
+        const parentLookup = (0, store_1.findParentOfNode)(this.doc, movingNode.id);
         if (!parentLookup) {
             return null;
         }
@@ -1539,13 +2620,13 @@ export class MindmapView extends ItemView {
             return false;
         }
         const movableNodes = [...nodes].filter((node) => node.id !== this.doc.root.id);
-        const nextParent = findNodeById(this.doc, nextParentId);
+        const nextParent = (0, store_1.findNodeById)(this.doc, nextParentId);
         if (!nextParent) {
             return false;
         }
         const movedNodes = [];
         movableNodes.forEach((node) => {
-            const moved = reparentNode(this.doc, node.id, nextParentId);
+            const moved = (0, store_1.reparentNode)(this.doc, node.id, nextParentId);
             if (moved) {
                 movedNodes.push(moved.moved);
             }
@@ -1557,7 +2638,7 @@ export class MindmapView extends ItemView {
             return null;
         }
         const subtreeIds = new Set(this.collectSubtreeNodes(movingNode).map((node) => node.id));
-        const candidates = visibleNodes(this.doc.root).filter((node) => node.id !== movingNode.id);
+        const candidates = (0, store_1.visibleNodes)(this.doc.root).filter((node) => node.id !== movingNode.id);
         let bestTarget = null;
         let bestDistance = Number.POSITIVE_INFINITY;
         candidates.forEach((candidate) => {
@@ -1584,11 +2665,339 @@ export class MindmapView extends ItemView {
             this.setZenMode(false);
         }
     }
+    sanitizeMindmapFileBaseName(title) {
+        const sanitized = title
+            .replace(/[\\/:*?"<>|]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        return sanitized || "未命名导图";
+    }
+    isMindmapFile(file) {
+        return file.name.endsWith(`.${PRIMARY_MINDMAP_EXTENSION}`) || file.name.endsWith(`.${LEGACY_MINDMAP_EXTENSION}`);
+    }
+    getMindmapObsidianUrl(file) {
+        return `obsidian://open?file=${encodeURIComponent(file.path)}`;
+    }
+    getNormalizedLinkedFilePath(rawLink) {
+        const input = rawLink.trim();
+        if (!input) {
+            return null;
+        }
+        if (input.startsWith("obsidian://")) {
+            try {
+                const url = new URL(input);
+                const fileParam = url.searchParams.get("file");
+                return fileParam ? (0, obsidian_1.normalizePath)(decodeURIComponent(fileParam)) : null;
+            }
+            catch {
+                return null;
+            }
+        }
+        if (/^https?:\/\//i.test(input)) {
+            return null;
+        }
+        return (0, obsidian_1.normalizePath)(input);
+    }
+    nodeLinksToPath(node, targetPath) {
+        const linkedPath = this.getNormalizedLinkedFilePath(node.linkTarget ?? "");
+        if (!linkedPath) {
+            return false;
+        }
+        if (linkedPath === targetPath) {
+            return true;
+        }
+        const linkedFile = this.app.metadataCache.getFirstLinkpathDest(linkedPath, this.file?.path ?? "")
+            ?? this.app.vault.getAbstractFileByPath(linkedPath);
+        return linkedFile instanceof obsidian_1.TFile && linkedFile.path === targetPath;
+    }
+    findNodeLinkedToPath(targetPath) {
+        if (!this.doc) {
+            return null;
+        }
+        let rootMatch = null;
+        let nonRootMatch = null;
+        (0, store_1.walkNodes)(this.doc.root, (node) => {
+            if (!this.nodeLinksToPath(node, targetPath)) {
+                return;
+            }
+            if (node.id === this.doc?.root.id) {
+                rootMatch = rootMatch ?? node;
+                return;
+            }
+            nonRootMatch = nonRootMatch ?? node;
+        });
+        return nonRootMatch ?? rootMatch;
+    }
+    getRootMindmapLinkTarget() {
+        if (!this.doc) {
+            return "";
+        }
+        const target = this.doc.root.linkTarget?.trim() ?? "";
+        if (!target) {
+            return "";
+        }
+        const linkedPath = this.getNormalizedLinkedFilePath(target);
+        if (linkedPath && this.file && linkedPath === this.file.path) {
+            return "";
+        }
+        return target;
+    }
+    getRootMindmapFile() {
+        const rootFile = this.app.vault.getAbstractFileByPath((0, obsidian_1.normalizePath)("root.mindmap"));
+        return rootFile instanceof obsidian_1.TFile && this.isMindmapFile(rootFile) ? rootFile : null;
+    }
+    updateRootReturnButton() {
+        const linkedRootTarget = this.getRootMindmapLinkTarget();
+        const canOpenDesktopRoot = linkedRootTarget.length > 0;
+        const configureButton = (button, enabled, title) => {
+            if (!button) {
+                return;
+            }
+            button.toggleClass("is-hidden", !enabled);
+            button.toggleAttribute("hidden", !enabled);
+            button.disabled = !enabled;
+            button.title = enabled ? title : "当前没有可返回的根导图";
+            button.setAttribute("aria-disabled", enabled ? "false" : "true");
+        };
+        configureButton(this.desktopRootButtonEl, canOpenDesktopRoot, "回到根导图");
+        configureButton(this.mobileRootButtonEl, false, "回到 root.mindmap");
+    }
+    async openRootMindmap() {
+        if (this.isMobileLayout) {
+            const rootFile = this.getRootMindmapFile();
+            if (!rootFile) {
+                new obsidian_1.Notice("未找到 root.mindmap");
+                return;
+            }
+            this.unlockMobileZenIfNeeded();
+            await this.openInternalTarget(rootFile.path, true, null);
+            return;
+        }
+        const target = this.getRootMindmapLinkTarget();
+        if (!target) {
+            return;
+        }
+        this.unlockMobileZenIfNeeded();
+        await this.openLinkedTarget(target);
+    }
+    ensureRootSourceLink(sourcePath) {
+        if (!this.doc || !sourcePath) {
+            return false;
+        }
+        const sourceFile = this.app.vault.getAbstractFileByPath((0, obsidian_1.normalizePath)(sourcePath));
+        if (!(sourceFile instanceof obsidian_1.TFile) || !this.isMindmapFile(sourceFile)) {
+            return false;
+        }
+        const nextLink = this.getMindmapObsidianUrl(sourceFile);
+        if ((this.doc.root.linkTarget ?? "") === nextLink) {
+            return false;
+        }
+        this.doc.root.linkTarget = nextLink;
+        return true;
+    }
+    expandNodeAndAncestors(nodeId) {
+        if (!this.doc) {
+            return false;
+        }
+        let changed = false;
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
+        if (node && node.collapsed) {
+            node.collapsed = false;
+            changed = true;
+        }
+        let lookup = (0, store_1.findParentOfNode)(this.doc, nodeId);
+        while (lookup) {
+            if (lookup.parent.collapsed) {
+                lookup.parent.collapsed = false;
+                changed = true;
+            }
+            lookup = (0, store_1.findParentOfNode)(this.doc, lookup.parent.id);
+        }
+        return changed;
+    }
+    centerViewportOnNode(node) {
+        const canvasRect = this.canvasEl.getBoundingClientRect();
+        const viewportWidth = Math.max(1, canvasRect.width);
+        const viewportHeight = Math.max(1, canvasRect.height);
+        this.zoomScale = Math.min(1.15, Math.max(0.85, this.zoomScale || 1));
+        this.panOffset.x = viewportWidth / 2 - node.x * this.zoomScale;
+        this.panOffset.y = viewportHeight / 2 - node.y * this.zoomScale;
+    }
+    centerViewportOnNodeById(nodeId) {
+        if (!this.doc) {
+            return;
+        }
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
+        if (!node) {
+            return;
+        }
+        this.centerViewportOnNode(node);
+        this.updateViewportTransform();
+    }
+    focusLinkedNodeFromPath(sourcePath) {
+        if (!this.doc) {
+            return false;
+        }
+        const normalizedSourcePath = (0, obsidian_1.normalizePath)(sourcePath);
+        const rootLinkChanged = this.ensureRootSourceLink(normalizedSourcePath);
+        const linkedNode = this.findNodeLinkedToPath(normalizedSourcePath);
+        if (!linkedNode) {
+            if (rootLinkChanged) {
+                this.requestSave();
+            }
+            return false;
+        }
+        const linkedNodeId = linkedNode.id;
+        const linkedNodeTitle = linkedNode.title;
+        const expanded = this.expandNodeAndAncestors(linkedNodeId);
+        if (expanded) {
+            this.normalizeLayout();
+        }
+        if (expanded || rootLinkChanged) {
+            this.requestSave();
+        }
+        this.shouldCenterOnNextRender = false;
+        this.shouldFocusRootOnNextRender = false;
+        this.setSingleSelectedNode(linkedNodeId);
+        this.renderMindmap();
+        window.requestAnimationFrame(() => {
+            this.centerViewportOnNodeById(linkedNodeId);
+            window.requestAnimationFrame(() => this.centerViewportOnNodeById(linkedNodeId));
+        });
+        // new Notice(`已定位到关联节点：${linkedNodeTitle}`);
+        return true;
+    }
+    focusLinkedNodeFromPendingPath() {
+        const sourcePath = this.pendingFocusLinkedFromPath;
+        if (!sourcePath) {
+            return;
+        }
+        this.pendingFocusLinkedFromPath = null;
+        if (!this.focusLinkedNodeFromPath(sourcePath)) {
+            // new Notice("未找到指向来源导图的关联节点");
+        }
+    }
+    getMindmapLinkCandidates() {
+        return this.app.vault.getFiles()
+            .filter((file) => this.isMindmapFile(file))
+            .sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: "base" }))
+            .map((file) => ({
+            file,
+            title: file.basename.replace(/\.mindmap$/i, ""),
+            obsidianUrl: this.getMindmapObsidianUrl(file)
+        }));
+    }
+    getNextMindmapPath(folderPath, baseName) {
+        let index = 0;
+        while (true) {
+            const suffix = index === 0 ? "" : ` ${index + 1}`;
+            const candidateName = `${baseName}${suffix}.${PRIMARY_MINDMAP_EXTENSION}`;
+            const candidatePath = (0, obsidian_1.normalizePath)(folderPath ? `${folderPath}/${candidateName}` : candidateName);
+            if (!this.app.vault.getAbstractFileByPath(candidatePath)) {
+                return candidatePath;
+            }
+            index += 1;
+        }
+    }
+    async createMindmapForAssociation(title) {
+        const folderPath = this.file?.parent?.path ?? "";
+        const baseName = this.sanitizeMindmapFileBaseName(title);
+        const finalPath = this.getNextMindmapPath(folderPath, baseName);
+        const doc = (0, types_1.createDefaultMindmap)();
+        doc.root.title = baseName;
+        doc.selfPath = finalPath;
+        const newFile = await this.app.vault.create(finalPath, JSON.stringify(doc, null, 2));
+        // new Notice(`已创建导图：${newFile.path}`);
+        return newFile;
+    }
+    async assignNodeLinkTarget(nodeId, linkTarget) {
+        if (!this.doc) {
+            return;
+        }
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
+        if (!node) {
+            return;
+        }
+        const nextTarget = linkTarget.trim();
+        if ((node.linkTarget ?? "") !== nextTarget) {
+            this.captureHistorySnapshot();
+            node.linkTarget = nextTarget;
+        }
+        if (this.selectedNodeId === nodeId && this.nodeLinkInputEl) {
+            this.nodeLinkInputEl.value = nextTarget;
+            this.updateNodeLinkActionButton(nextTarget);
+        }
+        this.requestSave();
+        this.updateMobileActionButtons();
+        this.renderMindmap();
+    }
+    openMindmapAssociationModal(nodeId) {
+        if (!this.doc) {
+            return;
+        }
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
+        if (!node) {
+            return;
+        }
+        const modal = new MindmapAssociationModal(this.app, this.getMindmapLinkCandidates().filter((candidate) => candidate.file.path !== this.file?.path), node.title.trim() || "新建导图", (candidate) => {
+            void this.assignNodeLinkTarget(nodeId, candidate.obsidianUrl);
+            // new Notice(`已关联到导图：${candidate.title}`);
+        }, async (title) => {
+            const newFile = await this.createMindmapForAssociation(title);
+            await this.assignNodeLinkTarget(nodeId, this.getMindmapObsidianUrl(newFile));
+            await this.openInternalTarget(newFile.path, true);
+        });
+        modal.open();
+    }
+    async renameMindmapFileToMatchRootTitle(nextTitle) {
+        if (!this.file) {
+            return;
+        }
+        const parentPath = this.file.parent?.path ?? "";
+        const extension = this.file.extension;
+        const nextBaseName = this.sanitizeMindmapFileBaseName(nextTitle);
+        const buildFileName = (suffix) => {
+            const resolvedBaseName = suffix && suffix > 1 ? `${nextBaseName} ${suffix}` : nextBaseName;
+            return extension ? `${resolvedBaseName}.${extension}` : resolvedBaseName;
+        };
+        let candidatePath = "";
+        let candidateFileName = "";
+        let suffix = 1;
+        while (true) {
+            candidateFileName = buildFileName(suffix);
+            candidatePath = (0, obsidian_1.normalizePath)(parentPath ? `${parentPath}/${candidateFileName}` : candidateFileName);
+            if (candidatePath === this.file.path) {
+                return;
+            }
+            const existing = this.app.vault.getAbstractFileByPath(candidatePath);
+            if (!existing || existing === this.file) {
+                break;
+            }
+            suffix += 1;
+        }
+        if (this.file.name === candidateFileName) {
+            return;
+        }
+        try {
+            await this.app.fileManager.renameFile(this.file, candidatePath);
+            const renamed = this.app.vault.getAbstractFileByPath(candidatePath);
+            if (renamed instanceof obsidian_1.TFile) {
+                this.file = renamed;
+            }
+            if (this.doc) {
+                this.doc.selfPath = candidatePath;
+            }
+            this.refreshTabTitle();
+        }
+        catch (error) {
+            // new Notice(`导图文件重命名失败：${String(error)}`);
+        }
+    }
     async syncDrawerToNode(nodeId) {
         if (!this.doc) {
             return;
         }
-        const node = findNodeById(this.doc, nodeId);
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
         if (!node) {
             return;
         }
@@ -1597,14 +3006,27 @@ export class MindmapView extends ItemView {
         this.drawerTitleEl.setText(`${node.title}`);
         const drawerHeaderPathEl = this.drawerHeaderEl.querySelector(".mindmap-drawer-header-path");
         drawerHeaderPathEl?.setText(this.doc?.selfPath ?? this.file?.path ?? "");
-        this.nodeTitleInputEl.value = node.title;
+        // this.nodeTitleInputEl.value = node.title;
+        const isRootNode = node.id === this.doc.root.id;
         this.nodeLinkInputEl.value = node.linkTarget ?? "";
+        this.nodeLinkInputEl.disabled = isRootNode;
+        this.nodeLinkInputEl.toggleClass("is-readonly", isRootNode);
+        this.nodeLinkInputEl.placeholder = isRootNode ? "中心节点链接由跳转来源自动维护" : "输入链接目标：导图或笔记路径";
+        this.nodeLinkInputEl.setAttribute("aria-readonly", isRootNode ? "true" : "false");
         this.updateNodeLinkActionButton(node.linkTarget ?? "");
+        this.setNoteEditorValue(node.note ?? "");
         this.noteInputEl.value = node.note ?? "";
+        this.cancelPendingMarkdownRender();
         await this.renderMarkdown(node.note ?? "");
         this.setNoteEditing(false);
     }
     async syncOpenDrawerWithSelection() {
+        if (this.editingNodeId !== null) {
+            if (!this.drawerEl.hasClass("is-hidden")) {
+                this.closeDrawer();
+            }
+            return;
+        }
         if (this.drawerEl.hasClass("is-hidden")) {
             return;
         }
@@ -1620,17 +3042,34 @@ export class MindmapView extends ItemView {
         if (!this.doc) {
             return;
         }
-        const node = findNodeById(this.doc, nodeId);
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
         if (!node) {
             return;
         }
         this.selectedNodeId = node.id;
         this.selectedNodeIds = new Set([node.id]);
+        this.editingNodeId = null;
         this.drawerEl.removeClass("is-hidden");
         this.layoutEl.addClass("has-drawer");
         this.updateMobileActionButtons();
         await this.syncDrawerToNode(node.id);
+        this.updateMobileActionClusterVisibility();
         this.renderMindmap();
+    }
+    async toggleDrawerForSelection() {
+        if (this.editingNodeId !== null) {
+            return false;
+        }
+        if (!this.drawerEl.hasClass("is-hidden")) {
+            this.closeDrawer();
+            return true;
+        }
+        const targetNodeId = this.selectedNodeId ?? Array.from(this.selectedNodeIds)[0] ?? null;
+        if (!targetNodeId) {
+            return false;
+        }
+        await this.openDrawer(targetNodeId);
+        return true;
     }
     updateNodeLinkActionButton(linkTarget) {
         if (!this.nodeLinkActionButtonEl) {
@@ -1645,16 +3084,121 @@ export class MindmapView extends ItemView {
         if (!this.isMobileLayout || !this.mobileActionClusterEl) {
             return;
         }
-        const selectedNode = this.doc && this.selectedNodeId ? findNodeById(this.doc, this.selectedNodeId) : null;
+        const selectedNode = this.doc && this.selectedNodeId ? (0, store_1.findNodeById)(this.doc, this.selectedNodeId) : null;
         const canDelete = !!selectedNode && this.doc?.root.id !== selectedNode.id;
         const hasLink = !!selectedNode?.linkTarget?.trim();
+        const canUndo = this.undoStack.length > 0;
+        const canRedo = this.redoStack.length > 0;
         this.mobileDeleteButtonEl?.toggleClass("is-hidden", !canDelete);
         this.mobileDeleteButtonEl?.toggleAttribute("hidden", !canDelete);
         this.mobileLinkButtonEl?.toggleClass("is-hidden", !hasLink);
         this.mobileLinkButtonEl?.toggleAttribute("hidden", !hasLink);
+        this.mobileUndoButtonEl?.toggleClass("is-disabled", !canUndo);
+        this.mobileUndoButtonEl?.setAttribute("aria-disabled", canUndo ? "false" : "true");
+        this.mobileUndoButtonEl?.removeAttribute("data-undo-count");
+        this.mobileRedoButtonEl?.toggleClass("is-disabled", !canRedo);
+        this.mobileRedoButtonEl?.setAttribute("aria-disabled", canRedo ? "false" : "true");
+    }
+    extractNoteHeadings(markdown) {
+        const headings = [];
+        let inFence = false;
+        markdown.split("\n").forEach((line) => {
+            if (/^\s*```/.test(line) || /^\s*~~~/.test(line)) {
+                inFence = !inFence;
+                return;
+            }
+            if (inFence) {
+                return;
+            }
+            const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line.trim());
+            if (!match) {
+                return;
+            }
+            const title = match[2].replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1").replace(/[*_`~]/g, "").trim();
+            if (!title) {
+                return;
+            }
+            headings.push({
+                level: match[1].length,
+                title,
+                index: headings.length
+            });
+        });
+        return headings;
+    }
+    renderNoteToc(markdown) {
+        if (!this.noteTocEl) {
+            return;
+        }
+        const wasExpanded = this.noteTocEl.hasClass("is-expanded");
+        const headings = this.extractNoteHeadings(markdown);
+        this.noteTocEl.empty();
+        this.noteTocEl.toggleClass("is-empty", headings.length === 0);
+        this.noteTocEl.toggleClass("is-expanded", wasExpanded && headings.length > 0);
+        this.noteTocEl.toggleClass("is-collapsed", !wasExpanded || headings.length === 0);
+        const toggleButtonEl = this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
+        toggleButtonEl.type = "button";
+        toggleButtonEl.setAttribute("aria-expanded", wasExpanded && headings.length > 0 ? "true" : "false");
+        toggleButtonEl.addEventListener("click", () => {
+            this.toggleNoteToc();
+        });
+        if (headings.length === 0) {
+            return;
+        }
+        const panelEl = this.noteTocEl.createDiv({ cls: "mindmap-note-toc-panel" });
+        const titleEl = panelEl.createDiv({ cls: "mindmap-note-toc-title", text: "目录" });
+        titleEl.setAttribute("aria-hidden", "true");
+        const listEl = panelEl.createDiv({ cls: "mindmap-note-toc-list" });
+        headings.forEach((heading) => {
+            const itemEl = listEl.createEl("button", {
+                cls: `mindmap-note-toc-item is-level-${heading.level}`,
+                text: heading.title
+            });
+            itemEl.type = "button";
+            itemEl.title = heading.title;
+            itemEl.addEventListener("click", () => {
+                this.noteTocEl.removeClass("is-expanded");
+                this.noteTocEl.addClass("is-collapsed");
+                this.noteTocEl.querySelector(".mindmap-note-toc-fab")?.setAttribute("aria-expanded", "false");
+                this.scrollNotePreviewToHeading(heading.index);
+            });
+        });
+    }
+    toggleNoteToc() {
+        if (!this.noteTocEl || this.noteTocEl.hasClass("is-empty")) {
+            return;
+        }
+        const expanded = !this.noteTocEl.hasClass("is-expanded");
+        this.noteTocEl.toggleClass("is-expanded", expanded);
+        this.noteTocEl.toggleClass("is-collapsed", !expanded);
+        this.noteTocEl.querySelector(".mindmap-note-toc-fab")?.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+    markRenderedNoteHeadings() {
+        const headings = Array.from(this.notePreviewEl.querySelectorAll("h1, h2, h3, h4, h5, h6"));
+        headings.forEach((heading, index) => {
+            heading.dataset.mindmapHeadingIndex = String(index);
+        });
+    }
+    scrollNotePreviewToHeading(index) {
+        if (!this.notePreviewEl) {
+            return;
+        }
+        if (this.noteSurfaceEl.hasClass("is-editing")) {
+            this.setNoteEditing(false);
+        }
+        window.setTimeout(() => {
+            const heading = this.notePreviewEl.querySelector(`[data-mindmap-heading-index="${index}"]`);
+            if (!heading) {
+                return;
+            }
+            heading.scrollIntoView({ behavior: "smooth", block: "start" });
+            heading.addClass("mindmap-note-heading-highlight");
+            window.setTimeout(() => heading.removeClass("mindmap-note-heading-highlight"), 900);
+        }, 0);
     }
     async renderMarkdown(markdown) {
         this.notePreviewEl.empty();
+        this.renderNoteToc(markdown);
         const trimmed = markdown.trim();
         if (!trimmed) {
             this.notePreviewEl.createDiv({
@@ -1664,7 +3208,8 @@ export class MindmapView extends ItemView {
             return;
         }
         const prepared = this.prepareMarkdownForPreview(markdown);
-        await MarkdownRenderer.renderMarkdown(prepared, this.notePreviewEl, this.file?.path ?? "", this);
+        await obsidian_1.MarkdownRenderer.renderMarkdown(prepared, this.notePreviewEl, this.file?.path ?? "", this);
+        this.markRenderedNoteHeadings();
         this.notePreviewEl.querySelectorAll("img").forEach((image) => {
             if (!(image instanceof HTMLImageElement)) {
                 return;
@@ -1707,10 +3252,119 @@ export class MindmapView extends ItemView {
             };
         });
     }
+    cancelPendingMarkdownRender() {
+        this.noteRenderRequestId += 1;
+        if (this.noteRenderTimer !== null) {
+            window.clearTimeout(this.noteRenderTimer);
+            this.noteRenderTimer = null;
+        }
+    }
     scheduleMarkdownRender(markdown) {
-        window.setTimeout(() => {
+        this.noteRenderRequestId += 1;
+        const requestId = this.noteRenderRequestId;
+        if (this.noteRenderTimer !== null) {
+            window.clearTimeout(this.noteRenderTimer);
+            this.noteRenderTimer = null;
+        }
+        this.noteRenderTimer = window.setTimeout(() => {
+            this.noteRenderTimer = null;
+            if (requestId !== this.noteRenderRequestId) {
+                return;
+            }
             void this.renderMarkdown(markdown);
         }, 60);
+    }
+    createNoteEditor() {
+        if (this.noteEditorView || !this.noteEditorHostEl) {
+            return;
+        }
+        const updateListener = view_1.EditorView.updateListener.of((update) => {
+            if (!update.docChanged || this.isSyncingNoteEditor) {
+                return;
+            }
+            this.handleNoteEditorInput(update.state.doc.toString());
+        });
+        const pasteHandler = view_1.EditorView.domEventHandlers({
+            paste: (event) => {
+                void this.handlePaste(event);
+                return false;
+            }
+        });
+        const closePreviewKeymap = view_1.keymap.of([
+            {
+                key: "Mod-Enter",
+                run: () => {
+                    this.setNoteEditing(false);
+                    return true;
+                }
+            },
+            {
+                key: "Tab",
+                run: (view) => (0, commands_1.indentMore)(view),
+                shift: (view) => (0, commands_1.indentLess)(view)
+            }
+        ]);
+        this.noteEditorView = new view_1.EditorView({
+            parent: this.noteEditorHostEl,
+            state: state_1.EditorState.create({
+                doc: "",
+                extensions: [
+                    (0, commands_1.history)(),
+                    (0, lang_markdown_1.markdown)(),
+                    (0, language_1.syntaxHighlighting)(language_1.defaultHighlightStyle, { fallback: true }),
+                    (0, view_1.placeholder)("使用 Markdown 记录节点笔记..."),
+                    closePreviewKeymap,
+                    view_1.keymap.of([...commands_1.defaultKeymap, ...commands_1.historyKeymap, ...search_1.searchKeymap]),
+                    updateListener,
+                    pasteHandler,
+                    view_1.EditorView.lineWrapping,
+                    view_1.EditorView.theme({
+                        "&": { height: "100%" },
+                        ".cm-scroller": { fontFamily: "var(--font-text)", lineHeight: "1.55" },
+                        ".cm-content": { minHeight: "100%" }
+                    })
+                ]
+            })
+        });
+    }
+    setNoteEditorValue(markdown) {
+        if (!this.noteEditorView) {
+            return;
+        }
+        const currentValue = this.noteEditorView.state.doc.toString();
+        if (currentValue === markdown) {
+            return;
+        }
+        this.isSyncingNoteEditor = true;
+        try {
+            this.noteEditorView.dispatch({
+                changes: {
+                    from: 0,
+                    to: this.noteEditorView.state.doc.length,
+                    insert: markdown
+                }
+            });
+        }
+        finally {
+            this.isSyncingNoteEditor = false;
+        }
+    }
+    handleNoteEditorInput(markdown) {
+        if (!this.doc || !this.selectedNodeId) {
+            return;
+        }
+        const node = (0, store_1.findNodeById)(this.doc, this.selectedNodeId);
+        if (!node) {
+            return;
+        }
+        if (!this.noteHistoryCapturedForSession) {
+            this.captureHistorySnapshot();
+            this.noteHistoryCapturedForSession = true;
+        }
+        node.note = markdown;
+        this.noteInputEl.value = markdown;
+        this.scheduleMarkdownRender(node.note ?? "");
+        this.requestSave();
     }
     prepareMarkdownForPreview(markdown) {
         return markdown.replace(/!\[\[([^\]]+)\]\]/g, (full, rawTarget) => {
@@ -1718,8 +3372,15 @@ export class MindmapView extends ItemView {
             if (!target) {
                 return full;
             }
-            const file = this.app.metadataCache.getFirstLinkpathDest(target, this.file?.path ?? "");
-            if (!(file instanceof TFile)) {
+            const normalizedTarget = (0, obsidian_1.normalizePath)(target);
+            const resolvedByLink = this.app.metadataCache.getFirstLinkpathDest(target, this.file?.path ?? "");
+            const resolvedByExactPath = this.app.vault.getAbstractFileByPath(normalizedTarget);
+            const file = resolvedByLink instanceof obsidian_1.TFile
+                ? resolvedByLink
+                : resolvedByExactPath instanceof obsidian_1.TFile
+                    ? resolvedByExactPath
+                    : null;
+            if (!(file instanceof obsidian_1.TFile)) {
                 return full;
             }
             const extension = file.extension.toLowerCase();
@@ -1840,7 +3501,7 @@ export class MindmapView extends ItemView {
     }
     async syncNow() {
         await this.flushSave();
-        new Notice("已立即写入文件，等待 iCloud 同步");
+        // new Notice("已立即写入文件，等待 iCloud 同步");
     }
     async reloadFromDisk(showNotice) {
         if (!this.file) {
@@ -1852,15 +3513,15 @@ export class MindmapView extends ItemView {
             if (!this.doc) {
                 return;
             }
-            if (this.selectedNodeId && !findNodeById(this.doc, this.selectedNodeId)) {
+            if (this.selectedNodeId && !(0, store_1.findNodeById)(this.doc, this.selectedNodeId)) {
                 this.selectedNodeId = this.doc.root.id;
             }
-            if (this.editingNodeId && !findNodeById(this.doc, this.editingNodeId)) {
+            if (this.editingNodeId && !(0, store_1.findNodeById)(this.doc, this.editingNodeId)) {
                 this.editingNodeId = null;
             }
             this.renderMindmap();
             if (showNotice) {
-                new Notice("已从磁盘重新加载导图");
+                // new Notice("已从磁盘重新加载导图");
             }
         }
         finally {
@@ -1883,28 +3544,28 @@ export class MindmapView extends ItemView {
                 const url = new URL(input);
                 const fileParam = url.searchParams.get("file");
                 if (!fileParam) {
-                    new Notice(`无法解析链接：${input}`);
+                    // new Notice(`无法解析链接：${input}`);
                     return;
                 }
-                const decodedPath = normalizePath(decodeURIComponent(fileParam));
-                await this.openByLinkText(decodedPath, true);
+                const decodedPath = (0, obsidian_1.normalizePath)(decodeURIComponent(fileParam));
+                await this.openInternalTarget(decodedPath, true);
                 return;
             }
             catch {
-                new Notice(`无法解析链接：${input}`);
+                // new Notice(`无法解析链接：${input}`);
                 return;
             }
         }
-        const normalizedInput = normalizePath(input);
+        const normalizedInput = (0, obsidian_1.normalizePath)(input);
         await this.openInternalTarget(normalizedInput, true);
     }
     async openByLinkText(linktext, inNewTab) {
-        const normalized = normalizePath(linktext);
+        const normalized = (0, obsidian_1.normalizePath)(linktext);
         const sourcePath = this.file?.path ?? "";
         try {
             await this.app.workspace.openLinkText(normalized, sourcePath, inNewTab);
             const resolved = this.app.metadataCache.getFirstLinkpathDest(normalized, sourcePath);
-            if (resolved instanceof TFile) {
+            if (resolved instanceof obsidian_1.TFile) {
                 const currentPath = this.file?.path;
                 if (currentPath && currentPath !== resolved.path) {
                     this.navigationStack.push(currentPath);
@@ -1912,12 +3573,12 @@ export class MindmapView extends ItemView {
             }
         }
         catch {
-            new Notice(`未找到目标文件：${normalized}`);
+            // new Notice(`未找到目标文件：${normalized}`);
         }
     }
-    async openInternalTarget(path, inNewTab) {
+    async openInternalTarget(path, inNewTab, focusLinkedFromPath = this.file?.path ?? null) {
         const target = this.app.vault.getAbstractFileByPath(path);
-        if (!(target instanceof TFile)) {
+        if (!(target instanceof obsidian_1.TFile)) {
             await this.openByLinkText(path, inNewTab);
             return;
         }
@@ -1927,24 +3588,46 @@ export class MindmapView extends ItemView {
         }
         const isMindmap = target.extension === "mindmap" || target.name.endsWith(".mindmap.json");
         if (isMindmap) {
-            const existingLeaf = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).find((leaf) => {
+            const existingLeaf = this.app.workspace.getLeavesOfType(exports.MINDMAP_VIEW_TYPE).find((leaf) => {
                 const view = leaf.view;
                 if (!(view instanceof MindmapView)) {
                     return false;
                 }
                 return view.getState().file === target.path;
             });
+            const normalizedFocusLinkedFromPath = focusLinkedFromPath ? (0, obsidian_1.normalizePath)(focusLinkedFromPath) : null;
             const targetLeaf = existingLeaf ?? (inNewTab ? this.app.workspace.getLeaf(true) : this.leaf);
+            if (existingLeaf) {
+                const view = existingLeaf.view;
+                if (view instanceof MindmapView) {
+                    if (obsidian_1.Platform.isMobile) {
+                        view.setZenMode(true);
+                    }
+                    if (normalizedFocusLinkedFromPath) {
+                        view.focusLinkedNodeFromPath(normalizedFocusLinkedFromPath);
+                    }
+                }
+                this.app.workspace.revealLeaf(existingLeaf);
+                return;
+            }
             await targetLeaf.setViewState({
-                type: MINDMAP_VIEW_TYPE,
+                type: exports.MINDMAP_VIEW_TYPE,
                 active: true,
-                state: { file: target.path }
+                state: {
+                    file: target.path,
+                    focusLinkedFrom: normalizedFocusLinkedFromPath ?? undefined
+                }
             });
             this.app.workspace.revealLeaf(targetLeaf);
             if (targetLeaf === this.leaf) {
                 this.file = target;
+                this.pendingFocusLinkedFromPath = normalizedFocusLinkedFromPath;
                 await this.loadFromFile();
                 this.closeDrawer();
+                if (this.isMobileLayout) {
+                    this.setZenMode(true);
+                }
+                this.focusLinkedNodeFromPendingPath();
                 this.renderMindmap();
             }
             return;
@@ -1954,30 +3637,34 @@ export class MindmapView extends ItemView {
     async goBackFromLinkedTarget() {
         const previousPath = this.navigationStack.pop();
         if (!previousPath) {
-            new Notice("没有可返回的上一个位置");
+            // new Notice("没有可返回的上一个位置");
             return;
         }
-        await this.openInternalTarget(previousPath, false);
+        await this.openInternalTarget(previousPath, false, null);
     }
     createChildNode(parentId) {
         if (!this.doc) {
             return;
         }
-        const parent = findNodeById(this.doc, parentId);
+        const parent = (0, store_1.findNodeById)(this.doc, parentId);
         if (!parent) {
             return;
         }
-        const child = addChildNode(this.doc, parentId, {
+        const anchorNodeId = parent.id;
+        this.closeDrawer();
+        this.captureHistorySnapshot();
+        const child = (0, store_1.addChildNode)(this.doc, parentId, {
             x: parent.x + 180,
             y: parent.y + (parent.children.length + 1) * 56
         });
         if (!child) {
             return;
         }
+        this.captureHistorySnapshot();
         this.setSingleSelectedNode(child.id);
         this.editingNodeId = child.id;
         this.playNodeActionSound("add");
-        this.normalizeLayout();
+        this.normalizeLayoutKeepingNodePosition(anchorNodeId);
         this.requestSave();
         this.renderMindmap();
     }
@@ -1985,19 +3672,28 @@ export class MindmapView extends ItemView {
         if (!this.doc) {
             return;
         }
-        const parentLookup = findParentOfNode(this.doc, nodeId);
+        const parentLookup = (0, store_1.findParentOfNode)(this.doc, nodeId);
         if (!parentLookup) {
             this.createChildNode(nodeId);
             return;
         }
-        const sibling = addChildNode(this.doc, parentLookup.parent.id);
-        if (!sibling) {
-            return;
-        }
+        const anchorNodeId = nodeId;
+        const insertIndex = parentLookup.index + 1;
+        this.closeDrawer();
+        this.captureHistorySnapshot();
+        const sibling = {
+            id: crypto.randomUUID(),
+            title: `新节点 ${parentLookup.parent.children.length + 1}`,
+            x: parentLookup.parent.x + 180,
+            y: parentLookup.parent.y + insertIndex * 72,
+            children: []
+        };
+        parentLookup.parent.children.splice(insertIndex, 0, sibling);
+        parentLookup.parent.collapsed = false;
         this.setSingleSelectedNode(sibling.id);
         this.editingNodeId = sibling.id;
         this.playNodeActionSound("add");
-        this.normalizeLayout();
+        this.normalizeLayoutKeepingNodePosition(anchorNodeId);
         this.requestSave();
         this.renderMindmap();
     }
@@ -2006,20 +3702,23 @@ export class MindmapView extends ItemView {
             return;
         }
         if (this.doc.root.id === nodeId) {
-            new Notice("根节点不可删除");
+            // new Notice("根节点不可删除");
             return;
         }
-        const node = findNodeById(this.doc, nodeId);
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
         if (!node) {
             return;
         }
+        const parentLookup = (0, store_1.findParentOfNode)(this.doc, nodeId);
+        const anchorNodeId = parentLookup?.parent.id ?? this.doc.root.id;
         const accepted = window.confirm(`确认删除节点「${node.title}」及其子节点吗？`);
         if (!accepted) {
             return;
         }
-        const result = removeNode(this.doc, nodeId);
+        this.captureHistorySnapshot();
+        const result = (0, store_1.removeNode)(this.doc, nodeId);
         if (!result) {
-            new Notice("删除失败：未找到节点");
+            // new Notice("删除失败：未找到节点");
             return;
         }
         const shouldCloseDrawer = this.selectedNodeId === nodeId;
@@ -2028,20 +3727,46 @@ export class MindmapView extends ItemView {
         if (shouldCloseDrawer) {
             this.closeDrawer();
         }
-        this.normalizeLayout();
+        this.normalizeLayoutKeepingNodePosition(anchorNodeId);
         this.requestSave();
         this.renderMindmap();
     }
     openNodeMenu(event, nodeId) {
-        const node = this.doc ? findNodeById(this.doc, nodeId) : null;
+        const node = this.doc ? (0, store_1.findNodeById)(this.doc, nodeId) : null;
         const linkTarget = node?.linkTarget?.trim() ?? "";
         const hasLink = linkTarget.length > 0;
-        const menu = new Menu();
+        const canPaste = !!node && this.hasClipboardSubtree();
+        const isRootNode = !!node && this.doc?.root.id === node.id;
+        const menu = new obsidian_1.Menu();
         menu.addItem((item) => {
             item.setTitle("查看").setIcon("file-text").onClick(() => {
                 void this.openDrawer(nodeId);
             });
         });
+        if (!isRootNode) {
+            menu.addItem((item) => {
+                item.setTitle("关联").setIcon("link").onClick(() => {
+                    this.openMindmapAssociationModal(nodeId);
+                });
+            });
+        }
+        // menu.addItem((item) => {
+        //   item.setTitle("添加子节点").setIcon("plus").onClick(() => {
+        //     this.createChildNode(nodeId);
+        //   });
+        // });
+        // menu.addItem((item) => {
+        //   item.setTitle("重命名节点").setIcon("pencil").onClick(() => {
+        //     this.renameNode(nodeId);
+        //   });
+        // });
+        // if (canPaste) {
+        //   menu.addItem((item) => {
+        //     item.setTitle("粘贴为子节点").setIcon("clipboard-paste").onClick(() => {
+        //       this.pasteClipboardSubtreeToNode(nodeId);
+        //     });
+        //   });
+        // }
         if (hasLink) {
             menu.addItem((item) => {
                 item.setTitle("跳转").setIcon("arrow-up-right").onClick(() => {
@@ -2049,49 +3774,6 @@ export class MindmapView extends ItemView {
                 });
             });
         }
-        // menu.addItem((item) => {
-        //   item.setTitle(hasLink ? "添加/替换链接" : "添加链接").setIcon("link").onClick(() => {
-        //     void this.openDrawer(nodeId).then(() => {
-        //       if (!hasLink) {
-        //         this.nodeLinkInputEl.value = "";
-        //         const currentNode = this.doc ? findNodeById(this.doc, nodeId) : null;
-        //         if (currentNode) {
-        //           currentNode.linkTarget = "";
-        //           this.requestSave();
-        //           this.renderMindmap();
-        //         }
-        //       }
-        //       window.setTimeout(() => this.nodeLinkInputEl.focus(), 0);
-        //     });
-        //   });
-        // });
-        // if (hasLink) {
-        //   menu.addItem((item) => {
-        //     item.setTitle("编辑链接").setIcon("pencil").onClick(() => {
-        //       void this.openDrawer(nodeId).then(() => {
-        //         window.setTimeout(() => {
-        //           this.nodeLinkInputEl.focus();
-        //           this.nodeLinkInputEl.select();
-        //         }, 0);
-        //       });
-        //     });
-        //   });
-        //   menu.addItem((item) => {
-        //     item.setTitle("清除链接").setIcon("unlink").onClick(() => {
-        //       this.clearNodeLink(nodeId);
-        //     });
-        //   });
-        // }
-        // menu.addItem((item) => {
-        //   item.setTitle("重命名节点").setIcon("pencil").onClick(() => {
-        //     this.renameNode(nodeId);
-        //   });
-        // });
-        // menu.addItem((item) => {
-        //   item.setTitle("添加子节点").setIcon("plus").onClick(() => {
-        //     this.createChildNode(nodeId);
-        //   });
-        // });
         // menu.addItem((item) => {
         //   item
         //     .setTitle("删除节点")
@@ -2101,12 +3783,17 @@ export class MindmapView extends ItemView {
         //     });
         // });
         menu.showAtMouseEvent(event);
+        window.requestAnimationFrame(() => {
+            document.body.querySelectorAll(".menu").forEach((menuEl) => {
+                menuEl.addClass("mindmap-node-menu");
+            });
+        });
     }
     clearNodeLink(nodeId) {
         if (!this.doc) {
             return;
         }
-        const node = findNodeById(this.doc, nodeId);
+        const node = (0, store_1.findNodeById)(this.doc, nodeId);
         if (!node) {
             return;
         }
@@ -2137,7 +3824,7 @@ export class MindmapView extends ItemView {
         const rect = this.svgEl.getBoundingClientRect();
         const beforeX = (clientX - rect.left - this.panOffset.x) / this.zoomScale;
         const beforeY = (clientY - rect.top - this.panOffset.y) / this.zoomScale;
-        const nextScale = Math.min(2.8, Math.max(0.4, this.zoomScale * (1 + zoomDelta)));
+        const nextScale = Math.min(MindmapView.MAX_ZOOM_SCALE, Math.max(MindmapView.MIN_ZOOM_SCALE, this.zoomScale * (1 + zoomDelta)));
         this.applyZoomFromPoint(clientX, clientY, beforeX, beforeY, nextScale);
     }
     setZoomAt(clientX, clientY, nextScale) {
@@ -2154,7 +3841,8 @@ export class MindmapView extends ItemView {
         this.zoomScale = nextScale;
         this.panOffset.x = clientX - rect.left - beforeX * this.zoomScale;
         this.panOffset.y = clientY - rect.top - beforeY * this.zoomScale;
-        this.renderMindmap();
+        this.updateViewportTransform();
+        this.updateMarqueeOverlay();
     }
     getTouchDistance(first, second) {
         const deltaX = first.clientX - second.clientX;
@@ -2172,6 +3860,31 @@ export class MindmapView extends ItemView {
             return;
         }
         this.autoLayoutTree();
+    }
+    normalizeLayoutKeepingNodePosition(anchorNodeId) {
+        if (!this.doc) {
+            return;
+        }
+        const anchorNode = (0, store_1.findNodeById)(this.doc, anchorNodeId);
+        if (!anchorNode) {
+            this.autoLayoutTree();
+            return;
+        }
+        const previousPosition = { x: anchorNode.x, y: anchorNode.y };
+        this.autoLayoutTree();
+        const nextAnchorNode = (0, store_1.findNodeById)(this.doc, anchorNodeId);
+        if (!nextAnchorNode) {
+            return;
+        }
+        const deltaX = previousPosition.x - nextAnchorNode.x;
+        const deltaY = previousPosition.y - nextAnchorNode.y;
+        if (Math.abs(deltaX) < 0.01 && Math.abs(deltaY) < 0.01) {
+            return;
+        }
+        (0, store_1.visibleNodes)(this.doc.root).forEach((node) => {
+            node.x += deltaX;
+            node.y += deltaY;
+        });
     }
     centerViewportOnRoot(root, nodes) {
         if (!nodes.length) {
@@ -2220,7 +3933,7 @@ export class MindmapView extends ItemView {
         const padding = this.isMobileLayout ? 28 : 56;
         const availableWidth = Math.max(1, viewportWidth - padding * 2);
         const availableHeight = Math.max(1, viewportHeight - padding * 2);
-        const fitScale = Math.min(1.2, Math.max(0.45, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)));
+        const fitScale = Math.min(MindmapView.MAX_ZOOM_SCALE, Math.max(MindmapView.MIN_ZOOM_SCALE, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)));
         this.zoomScale = fitScale;
         const contentCenterX = (minX + maxX) / 2;
         const contentCenterY = (minY + maxY) / 2;
@@ -2231,7 +3944,7 @@ export class MindmapView extends ItemView {
         if (!this.doc) {
             return;
         }
-        const levelGap = 220;
+        const horizontalGap = 60;
         const verticalGap = 34;
         const root = this.doc.root;
         const anchoredRootY = root.y;
@@ -2246,10 +3959,16 @@ export class MindmapView extends ItemView {
             }, 0);
             return Math.max(nodeHeight, childrenHeight);
         };
-        const place = (node, depth, topY) => {
+        const place = (node, topY, parent) => {
             const size = this.ensureNodeSize(node);
             const subtreeHeight = measureSubtreeHeight(node);
-            node.x = root.x + depth * levelGap;
+            if (parent) {
+                const parentSize = this.ensureNodeSize(parent);
+                node.x = parent.x + parentSize.width / 2 + horizontalGap + size.width / 2;
+            }
+            else {
+                node.x = root.x;
+            }
             if (node.collapsed || node.children.length === 0) {
                 node.y = topY + subtreeHeight / 2;
                 return subtreeHeight;
@@ -2258,7 +3977,7 @@ export class MindmapView extends ItemView {
             const childCenters = [];
             node.children.forEach((child, index) => {
                 const childHeight = measureSubtreeHeight(child);
-                place(child, depth + 1, childTop);
+                place(child, childTop, node);
                 childCenters.push(child.y);
                 childTop += childHeight;
                 if (index < node.children.length - 1) {
@@ -2276,10 +3995,10 @@ export class MindmapView extends ItemView {
             return subtreeHeight;
         };
         const totalHeight = Math.max(this.ensureNodeSize(root).height, measureSubtreeHeight(root));
-        place(root, 0, anchoredRootY - totalHeight / 2);
+        place(root, anchoredRootY - totalHeight / 2, null);
         const rootShiftY = anchoredRootY - root.y;
         if (Math.abs(rootShiftY) > 0.001) {
-            visibleNodes(root).forEach((node) => {
+            (0, store_1.visibleNodes)(root).forEach((node) => {
                 node.y += rootShiftY;
             });
         }
@@ -2304,17 +4023,98 @@ export class MindmapView extends ItemView {
             }
             this.insertTextAtCursor(`\n${markdownLink}\n`);
         }
-        this.noteInputEl.dispatchEvent(new Event("input"));
+        const latestMarkdown = this.getCurrentNoteEditorValue();
+        this.handleNoteEditorInput(latestMarkdown);
+        window.setTimeout(() => {
+            if (this.getCurrentNoteEditorValue() === latestMarkdown) {
+                void this.renderMarkdown(latestMarkdown);
+            }
+        }, 180);
+        window.setTimeout(() => {
+            if (this.getCurrentNoteEditorValue() === latestMarkdown) {
+                void this.renderMarkdown(latestMarkdown);
+            }
+        }, 600);
+    }
+    getCurrentNoteEditorValue() {
+        return this.noteEditorView?.state.doc.toString() ?? this.noteInputEl.value;
     }
     insertTextAtCursor(text) {
+        if (this.noteEditorView && !this.isMobileLayout) {
+            const view = this.noteEditorView;
+            const selection = view.state.selection.main;
+            view.dispatch({
+                changes: { from: selection.from, to: selection.to, insert: text },
+                selection: { anchor: selection.from + text.length },
+                scrollIntoView: true
+            });
+            view.focus();
+            return;
+        }
         const input = this.noteInputEl;
         const start = input.selectionStart ?? input.value.length;
         const end = input.selectionEnd ?? input.value.length;
         input.setRangeText(text, start, end, "end");
     }
+    indentNoteSelection(outdent) {
+        const input = this.noteInputEl;
+        const value = input.value;
+        const selectionStart = input.selectionStart ?? 0;
+        const selectionEnd = input.selectionEnd ?? 0;
+        const lineStart = value.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
+        const nextLineBreak = value.indexOf("\n", selectionEnd);
+        const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
+        const selectedBlock = value.slice(lineStart, lineEnd);
+        const lines = selectedBlock.split("\n");
+        if (!outdent) {
+            const indentedLines = lines.map((line) => `\t${line}`);
+            const replacement = indentedLines.join("\n");
+            input.setRangeText(replacement, lineStart, lineEnd, "preserve");
+            const isSingleCursor = selectionStart === selectionEnd;
+            if (isSingleCursor) {
+                const nextPosition = selectionStart + 1;
+                input.setSelectionRange(nextPosition, nextPosition);
+            }
+            else {
+                input.setSelectionRange(selectionStart + 1, selectionEnd + lines.length);
+            }
+        }
+        else {
+            let removedBeforeStart = 0;
+            let removedWithinSelection = 0;
+            const outdentedLines = lines.map((line, index) => {
+                if (line.startsWith("\t")) {
+                    if (index === 0) {
+                        removedBeforeStart = 1;
+                    }
+                    removedWithinSelection += 1;
+                    return line.slice(1);
+                }
+                if (line.startsWith("  ")) {
+                    if (index === 0) {
+                        removedBeforeStart = 2;
+                    }
+                    removedWithinSelection += 2;
+                    return line.slice(2);
+                }
+                return line;
+            });
+            const replacement = outdentedLines.join("\n");
+            input.setRangeText(replacement, lineStart, lineEnd, "preserve");
+            const isSingleCursor = selectionStart === selectionEnd;
+            if (isSingleCursor) {
+                const nextPosition = Math.max(lineStart, selectionStart - removedBeforeStart);
+                input.setSelectionRange(nextPosition, nextPosition);
+            }
+            else {
+                input.setSelectionRange(Math.max(lineStart, selectionStart - removedBeforeStart), Math.max(lineStart, selectionEnd - removedWithinSelection));
+            }
+        }
+        input.dispatchEvent(new Event("input"));
+    }
     async savePastedImage(file) {
         if (!this.file) {
-            new Notice("请先保存导图文件后再粘贴图片");
+            // new Notice("请先保存导图文件后再粘贴图片");
             return null;
         }
         const extFromType = file.type.split("/")[1] || "png";
@@ -2332,11 +4132,19 @@ export class MindmapView extends ItemView {
         }
         this.noteSurfaceEl.toggleClass("is-editing", editing);
         this.noteModeToggleEl.setText(editing ? "预览" : "编辑");
+        this.updateMobileActionClusterVisibility();
         if (editing) {
             this.notePreviewEl.addClass("is-live-hidden");
-            window.setTimeout(() => this.noteInputEl.focus({ preventScroll: true }), 0);
+            window.setTimeout(() => {
+                if (this.noteEditorView && !this.isMobileLayout) {
+                    this.noteEditorView.focus();
+                    return;
+                }
+                this.noteInputEl.focus({ preventScroll: true });
+            }, 0);
             return;
         }
+        this.noteEditorView?.contentDOM.blur();
         this.noteInputEl.blur();
         this.notePreviewEl.removeClass("is-live-hidden");
         this.focusContainerWithoutScroll();
@@ -2344,7 +4152,40 @@ export class MindmapView extends ItemView {
     closeDrawer() {
         this.drawerEl.addClass("is-hidden");
         this.layoutEl.removeClass("has-drawer");
+        this.noteHistoryCapturedForSession = false;
+        this.linkHistoryCapturedForSession = false;
         this.setNoteEditing(false);
+        this.updateMobileActionClusterVisibility();
+    }
+    clearCanvasSelection() {
+        this.collapseMobileGlobalActions();
+        if (this.selectedNodeId === null && this.editingNodeId === null && this.selectedNodeIds.size === 0) {
+            return;
+        }
+        this.selectedNodeId = null;
+        this.selectedNodeIds.clear();
+        this.editingNodeId = null;
+        this.closeMobileNodeTooltip();
+        this.updateMobileActionClusterVisibility();
+        this.renderMindmap();
+    }
+    updateMobileActionClusterVisibility() {
+        if (!this.isMobileLayout || !this.mobileActionClusterEl) {
+            return;
+        }
+        const noteInputFocused = document.activeElement === this.noteInputEl || (this.noteEditorView?.hasFocus ?? false);
+        const noteDrawerEditing = !this.drawerEl?.hasClass("is-hidden") && this.noteSurfaceEl?.hasClass("is-editing");
+        const hidden = this.editingNodeId !== null || noteInputFocused || noteDrawerEditing;
+        this.mobileActionClusterEl.toggleClass("is-editing-hidden", hidden);
+        this.mobileNodeTooltipEl?.toggleClass("is-editing-hidden", hidden);
+        this.mobileGlobalActionClusterEl?.toggleClass("is-editing-hidden", hidden);
+    }
+    setMobileActionClusterEditingHidden(hidden) {
+        if (!this.isMobileLayout || !this.mobileActionClusterEl) {
+            return;
+        }
+        this.mobileActionClusterEl.toggleClass("is-editing-hidden", hidden);
+        this.mobileGlobalActionClusterEl?.toggleClass("is-editing-hidden", hidden);
     }
     setSingleSelectedNode(nodeId) {
         this.selectedNodeId = nodeId;
@@ -2352,6 +4193,10 @@ export class MindmapView extends ItemView {
         if (nodeId !== this.editingNodeId) {
             this.editingNodeId = null;
         }
+        if (nodeId !== this.mobileTooltipNodeId) {
+            this.closeMobileNodeTooltip();
+        }
+        this.updateMobileActionClusterVisibility();
         void this.syncOpenDrawerWithSelection();
     }
     startInlineNodeEdit(nodeId) {
@@ -2359,9 +4204,11 @@ export class MindmapView extends ItemView {
             window.clearTimeout(this.pendingNodeSelectionTimer);
             this.pendingNodeSelectionTimer = null;
         }
+        this.closeDrawer();
         this.selectedNodeId = nodeId;
         this.selectedNodeIds = new Set([nodeId]);
         this.editingNodeId = nodeId;
+        this.updateMobileActionClusterVisibility();
         this.renderMindmap();
     }
     appendInlineTitleEditor(group, node, width, height) {
@@ -2380,42 +4227,50 @@ export class MindmapView extends ItemView {
         input.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
         input.addEventListener("pointerdown", (event) => event.stopPropagation());
         input.addEventListener("click", (event) => event.stopPropagation());
-        const commit = (createNextSibling) => {
-            if (!this.doc) {
-                this.editingNodeId = null;
-                this.renderMindmap();
-                return;
-            }
-            const nextValue = input.value.trim();
-            if (nextValue) {
-                node.title = nextValue;
-            }
-            if (node.id === this.doc.root.id) {
-                this.refreshTabTitle();
-            }
-            this.editingNodeId = null;
-            this.setSingleSelectedNode(node.id);
-            this.normalizeLayout();
-            this.requestSave();
-            this.renderMindmap();
-            if (createNextSibling) {
-                window.setTimeout(() => {
-                    if (this.selectedNodeId === node.id) {
-                        this.createSiblingNode(node.id);
+        const restoreMindmapKeyboardFocus = () => {
+            this.activateMindmapLeaf();
+            this.focusContainerWithoutScroll();
+            window.setTimeout(() => this.focusContainerWithoutScroll(), 0);
+        };
+        const commit = () => {
+            void (async () => {
+                if (!this.doc) {
+                    this.editingNodeId = null;
+                    this.updateMobileActionClusterVisibility();
+                    this.renderMindmap();
+                    restoreMindmapKeyboardFocus();
+                    return;
+                }
+                const nextValue = input.value.trim();
+                if (nextValue && nextValue !== node.title) {
+                    this.captureHistorySnapshot();
+                    node.title = nextValue;
+                    if (node.id === this.doc.root.id) {
+                        await this.renameMindmapFileToMatchRootTitle(nextValue);
                     }
-                }, 0);
-            }
+                }
+                if (node.id === this.doc.root.id) {
+                    this.refreshTabTitle();
+                }
+                this.editingNodeId = null;
+                this.setSingleSelectedNode(node.id);
+                this.normalizeLayoutKeepingNodePosition(node.id);
+                this.requestSave();
+                this.renderMindmap();
+                restoreMindmapKeyboardFocus();
+            })();
         };
         const cancel = () => {
             this.editingNodeId = null;
             this.setSingleSelectedNode(node.id);
             this.renderMindmap();
+            restoreMindmapKeyboardFocus();
         };
         input.addEventListener("keydown", (event) => {
             if (event.key === "Enter") {
                 event.preventDefault();
                 event.stopPropagation();
-                commit(true);
+                commit();
                 return;
             }
             if (event.key === "Escape") {
@@ -2424,7 +4279,7 @@ export class MindmapView extends ItemView {
             }
         });
         input.addEventListener("blur", () => {
-            commit(false);
+            commit();
         });
         foreignObject.appendChild(input);
         group.appendChild(foreignObject);
@@ -2435,9 +4290,14 @@ export class MindmapView extends ItemView {
         }, 0);
     }
     startResize(event, node) {
+        if (!this.doc) {
+            return;
+        }
         const size = this.ensureNodeSize(node);
         const startPoint = this.getDocumentPoint(event.clientX, event.clientY);
         const startSize = { width: size.width, height: size.height };
+        const snapshotBeforeResize = this.cloneDocument(this.doc);
+        let didResize = false;
         const onMove = (moveEvent) => {
             const point = this.getDocumentPoint(moveEvent.clientX, moveEvent.clientY);
             const deltaX = point.x - startPoint.x;
@@ -2445,11 +4305,16 @@ export class MindmapView extends ItemView {
             node.width = Math.max(MindmapView.MIN_NODE_WIDTH, startSize.width + deltaX);
             node.height = Math.max(MindmapView.MIN_NODE_HEIGHT, startSize.height + deltaY);
             node.manualSize = true;
+            didResize = didResize || node.width !== startSize.width || node.height !== startSize.height;
+            this.normalizeLayoutKeepingNodePosition(node.id);
             this.renderMindmap();
         };
         const onUp = () => {
             window.removeEventListener("pointermove", onMove);
             window.removeEventListener("pointerup", onUp);
+            if (didResize) {
+                this.pushHistoryState(snapshotBeforeResize);
+            }
             this.requestSave();
             this.renderMindmap();
         };
@@ -2457,13 +4322,18 @@ export class MindmapView extends ItemView {
         window.addEventListener("pointerup", onUp);
     }
     ensureNodeSize(node) {
-        const width = MindmapView.DEFAULT_NODE_WIDTH;
-        const autoHeight = this.measureAutoHeight(node.title, width);
-        const height = Math.max(MindmapView.MIN_NODE_HEIGHT, autoHeight);
-        if (node.width !== width || node.height !== height) {
+        const autoWidth = MindmapView.DEFAULT_NODE_WIDTH;
+        const autoHeight = this.measureAutoHeight(node.title, autoWidth);
+        const width = node.manualSize && typeof node.width === "number"
+            ? Math.max(MindmapView.MIN_NODE_WIDTH, node.width)
+            : autoWidth;
+        const height = node.manualSize && typeof node.height === "number"
+            ? Math.max(MindmapView.MIN_NODE_HEIGHT, node.height)
+            : Math.max(MindmapView.MIN_NODE_HEIGHT, autoHeight);
+        if (node.width !== width || node.height !== height || node.manualSize !== !!node.manualSize) {
             node.width = width;
             node.height = height;
-            node.manualSize = false;
+            node.manualSize = !!node.manualSize;
         }
         return { width, height };
     }
@@ -2496,6 +4366,8 @@ export class MindmapView extends ItemView {
         return Math.max(MindmapView.DEFAULT_NODE_HEIGHT, Math.ceil(totalLines * lineHeight + verticalPadding));
     }
 }
+exports.MindmapView = MindmapView;
+MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY = "obsidian-note-mind:clipboard";
 MindmapView.DEFAULT_NODE_WIDTH = 160;
 MindmapView.DEFAULT_NODE_HEIGHT = 44;
 MindmapView.MIN_NODE_WIDTH = 120;
@@ -2503,4 +4375,8 @@ MindmapView.MIN_NODE_HEIGHT = 44;
 MindmapView.DEFAULT_DRAWER_WIDTH = 380;
 MindmapView.MIN_DRAWER_WIDTH = 300;
 MindmapView.MAX_DRAWER_WIDTH = 860;
+MindmapView.MIN_ZOOM_SCALE = 0.1;
+MindmapView.MAX_ZOOM_SCALE = 3;
+MindmapView.MOBILE_NODE_TOOLTIP_REOPEN_DELAY = 420;
+MindmapView.MOBILE_NODE_DRAG_LONG_PRESS_DELAY = 300;
 //# sourceMappingURL=view.js.map

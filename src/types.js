@@ -1,4 +1,7 @@
-export const createDefaultMindmap = () => ({
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createDefaultMindmap = void 0;
+const createDefaultMindmap = () => ({
     version: 1,
     root: {
         id: crypto.randomUUID(),
@@ -28,4 +31,5 @@ export const createDefaultMindmap = () => ({
         ]
     }
 });
+exports.createDefaultMindmap = createDefaultMindmap;
 //# sourceMappingURL=types.js.map

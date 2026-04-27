@@ -170,7 +170,9 @@ export class MindmapView extends ItemView {
   private desktopActionClusterEl!: HTMLDivElement;
   private desktopSyncButtonEl!: HTMLButtonElement;
   private desktopRefreshButtonEl!: HTMLButtonElement;
+  private desktopRootButtonEl!: HTMLButtonElement;
   private mobileZenButtonEl!: HTMLButtonElement;
+  private mobileRootButtonEl!: HTMLButtonElement;
   private mobileActionClusterEl!: HTMLDivElement;
   private mobileNodeTooltipEl!: HTMLDivElement;
   private mobileGlobalActionClusterEl!: HTMLDivElement;
@@ -181,11 +183,14 @@ export class MindmapView extends ItemView {
   private drawerTitleEl!: HTMLHeadingElement;
   private drawerCloseEl!: HTMLButtonElement;
   private noteModeToggleEl!: HTMLButtonElement;
+  private noteTocEl!: HTMLDivElement;
   private nodeLinkInputEl!: HTMLInputElement;
   private noteSurfaceEl!: HTMLDivElement;
   private noteEditorHostEl!: HTMLDivElement;
   private noteEditorView: EditorView | null = null;
   private isSyncingNoteEditor = false;
+  private noteRenderTimer: number | null = null;
+  private noteRenderRequestId = 0;
   private noteInputEl!: HTMLTextAreaElement;
   private notePreviewEl!: HTMLDivElement;
   private svgEl!: SVGSVGElement;
@@ -228,6 +233,8 @@ export class MindmapView extends ItemView {
   private readonly textMeasureCanvas = document.createElement("canvas");
   private marqueeSelection: { startX: number; startY: number; currentX: number; currentY: number } | null = null;
   private mobileCanvasLongPressTimer: number | null = null;
+  private mobileGlobalActionsLongPressTimer: number | null = null;
+  private suppressNextMobileZenClick = false;
   private pendingCanvasPanStart: { x: number; y: number; panX: number; panY: number; startedAt: number; startedOnNode: boolean } | null = null;
   private mobileLongPressMarqueeActive = false;
   private lastMobileCanvasTap: { x: number; y: number; time: number } | null = null;
@@ -455,9 +462,9 @@ export class MindmapView extends ItemView {
       return;
     }
     this.writeClipboardForest(nodes, "copy");
-    new Notice(nodes.length === 1
-      ? `已复制节点「${nodes[0].title}」及其子树`
-      : `已复制 ${nodes.length} 个节点子树`);
+    // new Notice(nodes.length === 1
+    //  ?`已复制节点「${nodes[0].title}」及其子树`
+    //  : `已复制 ${nodes.length} 个节点子树`);
     this.updateMobileActionButtons();
   }
 
@@ -470,7 +477,7 @@ export class MindmapView extends ItemView {
       return;
     }
     this.writeClipboardPayload(node, "copy");
-    new Notice(`已复制节点「${node.title}」及其子树`);
+    // new Notice(`已复制节点「${node.title}」及其子树`);
     this.updateMobileActionButtons();
   }
 
@@ -502,7 +509,7 @@ export class MindmapView extends ItemView {
       return;
     }
     if (rootIds.includes(this.doc.root.id)) {
-      new Notice("根节点不可剪切");
+      // new Notice("根节点不可剪切");
       return;
     }
     const nodes = rootIds
@@ -542,7 +549,7 @@ export class MindmapView extends ItemView {
     this.updateMobileActionButtons();
     this.updateMobileActionClusterVisibility();
     this.renderMindmap();
-    new Notice(nodes.length === 1 ? "已剪切节点，可粘贴到任意导图节点下" : `已剪切 ${nodes.length} 个节点，可粘贴到任意导图节点下`);
+    // new Notice(nodes.length === 1 ? "已剪切节点，可粘贴到任意导图节点下" : `已剪切 ${nodes.length} 个节点，可粘贴到任意导图节点下`);
   }
 
   private async cutNodeSubtree(nodeId: string): Promise<void> {
@@ -550,7 +557,7 @@ export class MindmapView extends ItemView {
       return;
     }
     if (nodeId === this.doc.root.id) {
-      new Notice("根节点不可剪切");
+      // new Notice("根节点不可剪切");
       return;
     }
     const node = findNodeById(this.doc, nodeId);
@@ -566,7 +573,7 @@ export class MindmapView extends ItemView {
     this.writeClipboardPayload(node, "cut");
     const result = removeNode(this.doc, nodeId);
     if (!result) {
-      new Notice("剪切失败：未找到节点");
+      // new Notice("剪切失败：未找到节点");
       return;
     }
     this.pushHistoryState(snapshotBeforeCut);
@@ -583,7 +590,7 @@ export class MindmapView extends ItemView {
     this.updateMobileActionButtons();
     this.updateMobileActionClusterVisibility();
     this.renderMindmap();
-    new Notice("已剪切节点，可粘贴到任意导图节点下");
+    // new Notice("已剪切节点，可粘贴到任意导图节点下");
   }
 
   private deleteSelectedNodeSubtrees(): Promise<void> {
@@ -595,7 +602,7 @@ export class MindmapView extends ItemView {
       return Promise.resolve();
     }
     if (rootIds.includes(this.doc.root.id)) {
-      new Notice("根节点不可删除");
+      // new Notice("根节点不可删除");
       return Promise.resolve();
     }
     const nodes = rootIds
@@ -633,7 +640,7 @@ export class MindmapView extends ItemView {
         this.updateMobileActionButtons();
         this.updateMobileActionClusterVisibility();
         this.renderMindmap();
-        new Notice(nodes.length === 1 ? "已删除节点" : `已删除 ${nodes.length} 个节点`);
+        // new Notice(nodes.length === 1 ? "已删除节点" : `已删除 ${nodes.length} 个节点`);
       });
     }
     this.closeMobileNodeTooltip();
@@ -643,7 +650,7 @@ export class MindmapView extends ItemView {
     this.updateMobileActionButtons();
     this.updateMobileActionClusterVisibility();
     this.renderMindmap();
-    new Notice(nodes.length === 1 ? "已删除节点" : `已删除 ${nodes.length} 个节点`);
+    // new Notice(nodes.length === 1 ? "已删除节点" : `已删除 ${nodes.length} 个节点`);
     return Promise.resolve();
   }
 
@@ -653,12 +660,12 @@ export class MindmapView extends ItemView {
     }
     const payload = this.getClipboardPayload();
     if (!payload) {
-      new Notice("剪贴板里没有可粘贴的节点");
+      // new Notice("剪贴板里没有可粘贴的节点");
       return;
     }
     const parent = findNodeById(this.doc, parentId);
     if (!parent) {
-      new Notice("未找到粘贴目标节点");
+      // new Notice("未找到粘贴目标节点");
       return;
     }
     const snapshotBeforePaste = this.cloneDocument(this.doc);
@@ -675,9 +682,9 @@ export class MindmapView extends ItemView {
     this.updateMobileActionButtons();
     this.updateMobileActionClusterVisibility();
     this.renderMindmap();
-    new Notice(forest.length === 1
-      ? `已将${payload.operation === "cut" ? "剪切" : "复制"}内容粘贴到「${parent.title}」下`
-      : `已将 ${forest.length} 个${payload.operation === "cut" ? "剪切" : "复制"}节点粘贴到「${parent.title}」下`);
+    // new Notice(forest.length === 1
+    //  ?`已将${payload.operation === "cut" ? "剪切" : "复制"}内容粘贴到「${parent.title}」下`
+    //  : `已将 ${forest.length} 个${payload.operation === "cut" ? "剪切" : "复制"}节点粘贴到「${parent.title}」下`);
   }
 
   private captureHistorySnapshot(): void {
@@ -851,6 +858,53 @@ export class MindmapView extends ItemView {
       window.clearTimeout(this.mobileCanvasLongPressTimer);
       this.mobileCanvasLongPressTimer = null;
     }
+  }
+
+  private clearMobileGlobalActionsLongPress(): void {
+    if (this.mobileGlobalActionsLongPressTimer !== null) {
+      window.clearTimeout(this.mobileGlobalActionsLongPressTimer);
+      this.mobileGlobalActionsLongPressTimer = null;
+    }
+  }
+
+  private expandMobileGlobalActions(): void {
+    if (!this.isMobileLayout) {
+      return;
+    }
+    this.mobileGlobalActionClusterEl?.addClass("is-expanded");
+    this.mobileUndoButtonEl?.removeClass("is-hidden");
+    this.mobileRedoButtonEl?.removeClass("is-hidden");
+    this.mobileRootButtonEl?.removeClass("is-hidden");
+    this.mobileRootButtonEl?.removeAttribute("hidden");
+    if (this.mobileRootButtonEl) {
+      this.mobileRootButtonEl.disabled = false;
+      this.mobileRootButtonEl.title = "回到 root.mindmap";
+      this.mobileRootButtonEl.setAttribute("aria-disabled", "false");
+    }
+  }
+
+  private collapseMobileGlobalActions(): void {
+    if (!this.isMobileLayout) {
+      return;
+    }
+    this.clearMobileGlobalActionsLongPress();
+    this.mobileGlobalActionClusterEl?.removeClass("is-expanded");
+    this.mobileUndoButtonEl?.addClass("is-hidden");
+    this.mobileRedoButtonEl?.addClass("is-hidden");
+    this.mobileRootButtonEl?.addClass("is-hidden");
+  }
+
+  private startMobileGlobalActionsLongPress(): void {
+    if (!this.isMobileLayout) {
+      return;
+    }
+    this.clearMobileGlobalActionsLongPress();
+    this.mobileGlobalActionsLongPressTimer = window.setTimeout(() => {
+      this.mobileGlobalActionsLongPressTimer = null;
+      this.suppressNextMobileZenClick = true;
+      this.expandMobileGlobalActions();
+      navigator.vibrate?.(10);
+    }, 380);
   }
 
   private beginSelectionMarquee(startX: number, startY: number): void {
@@ -1626,6 +1680,11 @@ export class MindmapView extends ItemView {
     // this.desktopRefreshButtonEl.addEventListener("click", () => {
     //   void this.reloadFromDisk(true);
     // });
+    // this.desktopRootButtonEl = this.containerEl.createEl("button", { cls: "mindmap-root-return-button mindmap-desktop-root-button is-hidden", text: "root1" });
+    // this.desktopRootButtonEl.type = "button";
+    // this.desktopRootButtonEl.addEventListener("click", () => {
+    //   void this.openRootMindmap();
+    // });
     this.mobileActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-mobile-action-cluster" });
     this.mobileActionClusterEl.addClass("is-hidden");
     this.mobileNodeTooltipEl = this.containerEl.createDiv({ cls: "mindmap-mobile-node-tooltip is-hidden" });
@@ -1654,16 +1713,18 @@ export class MindmapView extends ItemView {
       }
     });
 
-    this.mobileUndoButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-undo-button", text: "撤回" });
+    this.mobileUndoButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-undo-button is-hidden", text: "撤回" });
     this.mobileUndoButtonEl.type = "button";
     this.mobileUndoButtonEl.addEventListener("click", () => {
       this.closeMobileNodeTooltip();
+      this.collapseMobileGlobalActions();
       void this.undo();
     });
-    this.mobileRedoButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-redo-button", text: "重做" });
+    this.mobileRedoButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-redo-button is-hidden", text: "重做" });
     this.mobileRedoButtonEl.type = "button";
     this.mobileRedoButtonEl.addEventListener("click", () => {
       this.closeMobileNodeTooltip();
+      this.collapseMobileGlobalActions();
       void this.redo();
     });
 
@@ -1711,7 +1772,33 @@ export class MindmapView extends ItemView {
     this.mobileZenButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-zen-button", text: "锁住" });
     this.mobileZenButtonEl.type = "button";
     this.mobileZenButtonEl.addEventListener("click", () => {
+      if (this.suppressNextMobileZenClick) {
+        this.suppressNextMobileZenClick = false;
+        return;
+      }
+      this.collapseMobileGlobalActions();
       this.setZenMode(!this.isZenMode);
+    });
+    this.mobileZenButtonEl.addEventListener("pointerdown", (event) => {
+      if (!this.isMobileLayout || event.pointerType === "mouse") {
+        return;
+      }
+      this.startMobileGlobalActionsLongPress();
+    });
+    this.mobileZenButtonEl.addEventListener("pointerup", () => {
+      this.clearMobileGlobalActionsLongPress();
+    });
+    this.mobileZenButtonEl.addEventListener("pointercancel", () => {
+      this.clearMobileGlobalActionsLongPress();
+    });
+    this.mobileZenButtonEl.addEventListener("pointerleave", () => {
+      this.clearMobileGlobalActionsLongPress();
+    });
+    this.mobileRootButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-root-return-button mindmap-mobile-root-button is-hidden", text: "root" });
+    this.mobileRootButtonEl.type = "button";
+    this.mobileRootButtonEl.addEventListener("click", () => {
+      this.collapseMobileGlobalActions();
+      void this.openRootMindmap();
     });
     this.updateMobileActionButtons();
     this.drawerResizeHandleEl = this.layoutEl.createDiv({ cls: "mindmap-drawer-resize-handle" });
@@ -1824,6 +1911,8 @@ export class MindmapView extends ItemView {
       this.noteEditorHostEl.addClass("is-hidden");
     }
     this.notePreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-preview markdown-preview-view" });
+    this.noteTocEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-toc is-empty is-collapsed" });
+    this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
 
     this.noteInputEl.addEventListener("focus", () => {
       this.updateMobileActionClusterVisibility();
@@ -1957,6 +2046,7 @@ export class MindmapView extends ItemView {
       window.cancelAnimationFrame(this.pendingRenderFrame);
       this.pendingRenderFrame = null;
     }
+    this.cancelPendingMarkdownRender();
     this.noteEditorView?.destroy();
     this.noteEditorView = null;
     await this.flushSave();
@@ -2042,7 +2132,7 @@ export class MindmapView extends ItemView {
         this.closeMobileNodeTooltip();
       }
     } catch (error) {
-      new Notice(`导图读取失败：${String(error)}`);
+      // new Notice(`导图读取失败：${String(error)}`);
       this.doc = null;
       if (this.isMobileLayout) {
         this.setZenMode(false);
@@ -2092,6 +2182,7 @@ export class MindmapView extends ItemView {
     }
     this.graphLayerEl.innerHTML = "";
     this.updateMobileActionButtons();
+    this.updateRootReturnButton();
     if (!this.doc) {
       return;
     }
@@ -2897,6 +2988,62 @@ export class MindmapView extends ItemView {
     return nonRootMatch ?? rootMatch;
   }
 
+  private getRootMindmapLinkTarget(): string {
+    if (!this.doc) {
+      return "";
+    }
+    const target = this.doc.root.linkTarget?.trim() ?? "";
+    if (!target) {
+      return "";
+    }
+    const linkedPath = this.getNormalizedLinkedFilePath(target);
+    if (linkedPath && this.file && linkedPath === this.file.path) {
+      return "";
+    }
+    return target;
+  }
+
+  private getRootMindmapFile(): TFile | null {
+    const rootFile = this.app.vault.getAbstractFileByPath(normalizePath("root.mindmap"));
+    return rootFile instanceof TFile && this.isMindmapFile(rootFile) ? rootFile : null;
+  }
+
+  private updateRootReturnButton(): void {
+    const linkedRootTarget = this.getRootMindmapLinkTarget();
+    const canOpenDesktopRoot = linkedRootTarget.length > 0;
+    const configureButton = (button: HTMLButtonElement | undefined, enabled: boolean, title: string): void => {
+      if (!button) {
+        return;
+      }
+      button.toggleClass("is-hidden", !enabled);
+      button.toggleAttribute("hidden", !enabled);
+      button.disabled = !enabled;
+      button.title = enabled ? title : "当前没有可返回的根导图";
+      button.setAttribute("aria-disabled", enabled ? "false" : "true");
+    };
+    configureButton(this.desktopRootButtonEl, canOpenDesktopRoot, "回到根导图");
+    configureButton(this.mobileRootButtonEl, false, "回到 root.mindmap");
+  }
+
+  private async openRootMindmap(): Promise<void> {
+    if (this.isMobileLayout) {
+      const rootFile = this.getRootMindmapFile();
+      if (!rootFile) {
+        new Notice("未找到 root.mindmap");
+        return;
+      }
+      this.unlockMobileZenIfNeeded();
+      await this.openInternalTarget(rootFile.path, true, null);
+      return;
+    }
+    const target = this.getRootMindmapLinkTarget();
+    if (!target) {
+      return;
+    }
+    this.unlockMobileZenIfNeeded();
+    await this.openLinkedTarget(target);
+  }
+
   private ensureRootSourceLink(sourcePath: string | null): boolean {
     if (!this.doc || !sourcePath) {
       return false;
@@ -2985,7 +3132,7 @@ export class MindmapView extends ItemView {
       this.centerViewportOnNodeById(linkedNodeId);
       window.requestAnimationFrame(() => this.centerViewportOnNodeById(linkedNodeId));
     });
-    new Notice(`已定位到关联节点：${linkedNodeTitle}`);
+    // new Notice(`已定位到关联节点：${linkedNodeTitle}`);
     return true;
   }
 
@@ -2996,7 +3143,7 @@ export class MindmapView extends ItemView {
     }
     this.pendingFocusLinkedFromPath = null;
     if (!this.focusLinkedNodeFromPath(sourcePath)) {
-      new Notice("未找到指向来源导图的关联节点");
+      // new Notice("未找到指向来源导图的关联节点");
     }
   }
 
@@ -3032,7 +3179,7 @@ export class MindmapView extends ItemView {
     doc.root.title = baseName;
     doc.selfPath = finalPath;
     const newFile = await this.app.vault.create(finalPath, JSON.stringify(doc, null, 2));
-    new Notice(`已创建导图：${newFile.path}`);
+    // new Notice(`已创建导图：${newFile.path}`);
     return newFile;
   }
 
@@ -3072,7 +3219,7 @@ export class MindmapView extends ItemView {
       node.title.trim() || "新建导图",
       (candidate) => {
         void this.assignNodeLinkTarget(nodeId, candidate.obsidianUrl);
-        new Notice(`已关联到导图：${candidate.title}`);
+        // new Notice(`已关联到导图：${candidate.title}`);
       },
       async (title) => {
         const newFile = await this.createMindmapForAssociation(title);
@@ -3126,7 +3273,7 @@ export class MindmapView extends ItemView {
       }
       this.refreshTabTitle();
     } catch (error) {
-      new Notice(`导图文件重命名失败：${String(error)}`);
+      // new Notice(`导图文件重命名失败：${String(error)}`);
     }
   }
 
@@ -3153,6 +3300,7 @@ export class MindmapView extends ItemView {
     this.updateNodeLinkActionButton(node.linkTarget ?? "");
     this.setNoteEditorValue(node.note ?? "");
     this.noteInputEl.value = node.note ?? "";
+    this.cancelPendingMarkdownRender();
     await this.renderMarkdown(node.note ?? "");
     this.setNoteEditing(false);
   }
@@ -3242,8 +3390,111 @@ export class MindmapView extends ItemView {
     this.mobileRedoButtonEl?.setAttribute("aria-disabled", canRedo ? "false" : "true");
   }
 
+  private extractNoteHeadings(markdown: string): Array<{ level: number; title: string; index: number }> {
+    const headings: Array<{ level: number; title: string; index: number }> = [];
+    let inFence = false;
+    markdown.split("\n").forEach((line) => {
+      if (/^\s*```/.test(line) || /^\s*~~~/.test(line)) {
+        inFence = !inFence;
+        return;
+      }
+      if (inFence) {
+        return;
+      }
+      const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line.trim());
+      if (!match) {
+        return;
+      }
+      const title = match[2].replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1").replace(/[*_`~]/g, "").trim();
+      if (!title) {
+        return;
+      }
+      headings.push({
+        level: match[1].length,
+        title,
+        index: headings.length
+      });
+    });
+    return headings;
+  }
+
+  private renderNoteToc(markdown: string): void {
+    if (!this.noteTocEl) {
+      return;
+    }
+    const wasExpanded = this.noteTocEl.hasClass("is-expanded");
+    const headings = this.extractNoteHeadings(markdown);
+    this.noteTocEl.empty();
+    this.noteTocEl.toggleClass("is-empty", headings.length === 0);
+    this.noteTocEl.toggleClass("is-expanded", wasExpanded && headings.length > 0);
+    this.noteTocEl.toggleClass("is-collapsed", !wasExpanded || headings.length === 0);
+    const toggleButtonEl = this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
+    toggleButtonEl.type = "button";
+    toggleButtonEl.setAttribute("aria-expanded", wasExpanded && headings.length > 0 ? "true" : "false");
+    toggleButtonEl.addEventListener("click", () => {
+      this.toggleNoteToc();
+    });
+    if (headings.length === 0) {
+      return;
+    }
+    const panelEl = this.noteTocEl.createDiv({ cls: "mindmap-note-toc-panel" });
+    const titleEl = panelEl.createDiv({ cls: "mindmap-note-toc-title", text: "目录" });
+    titleEl.setAttribute("aria-hidden", "true");
+    const listEl = panelEl.createDiv({ cls: "mindmap-note-toc-list" });
+    headings.forEach((heading) => {
+      const itemEl = listEl.createEl("button", {
+        cls: `mindmap-note-toc-item is-level-${heading.level}`,
+        text: heading.title
+      });
+      itemEl.type = "button";
+      itemEl.title = heading.title;
+      itemEl.addEventListener("click", () => {
+        this.noteTocEl.removeClass("is-expanded");
+        this.noteTocEl.addClass("is-collapsed");
+        this.noteTocEl.querySelector(".mindmap-note-toc-fab")?.setAttribute("aria-expanded", "false");
+        this.scrollNotePreviewToHeading(heading.index);
+      });
+    });
+  }
+
+  private toggleNoteToc(): void {
+    if (!this.noteTocEl || this.noteTocEl.hasClass("is-empty")) {
+      return;
+    }
+    const expanded = !this.noteTocEl.hasClass("is-expanded");
+    this.noteTocEl.toggleClass("is-expanded", expanded);
+    this.noteTocEl.toggleClass("is-collapsed", !expanded);
+    this.noteTocEl.querySelector(".mindmap-note-toc-fab")?.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+
+  private markRenderedNoteHeadings(): void {
+    const headings = Array.from(this.notePreviewEl.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6"));
+    headings.forEach((heading, index) => {
+      heading.dataset.mindmapHeadingIndex = String(index);
+    });
+  }
+
+  private scrollNotePreviewToHeading(index: number): void {
+    if (!this.notePreviewEl) {
+      return;
+    }
+    if (this.noteSurfaceEl.hasClass("is-editing")) {
+      this.setNoteEditing(false);
+    }
+    window.setTimeout(() => {
+      const heading = this.notePreviewEl.querySelector<HTMLElement>(`[data-mindmap-heading-index="${index}"]`);
+      if (!heading) {
+        return;
+      }
+      heading.scrollIntoView({ behavior: "smooth", block: "start" });
+      heading.addClass("mindmap-note-heading-highlight");
+      window.setTimeout(() => heading.removeClass("mindmap-note-heading-highlight"), 900);
+    }, 0);
+  }
+
   private async renderMarkdown(markdown: string): Promise<void> {
     this.notePreviewEl.empty();
+    this.renderNoteToc(markdown);
     const trimmed = markdown.trim();
     if (!trimmed) {
       this.notePreviewEl.createDiv({
@@ -3254,6 +3505,7 @@ export class MindmapView extends ItemView {
     }
     const prepared = this.prepareMarkdownForPreview(markdown);
     await MarkdownRenderer.renderMarkdown(prepared, this.notePreviewEl, this.file?.path ?? "", this);
+    this.markRenderedNoteHeadings();
     this.notePreviewEl.querySelectorAll("img").forEach((image) => {
       if (!(image instanceof HTMLImageElement)) {
         return;
@@ -3297,8 +3549,26 @@ export class MindmapView extends ItemView {
     });
   }
 
+  private cancelPendingMarkdownRender(): void {
+    this.noteRenderRequestId += 1;
+    if (this.noteRenderTimer !== null) {
+      window.clearTimeout(this.noteRenderTimer);
+      this.noteRenderTimer = null;
+    }
+  }
+
   private scheduleMarkdownRender(markdown: string): void {
-    window.setTimeout(() => {
+    this.noteRenderRequestId += 1;
+    const requestId = this.noteRenderRequestId;
+    if (this.noteRenderTimer !== null) {
+      window.clearTimeout(this.noteRenderTimer);
+      this.noteRenderTimer = null;
+    }
+    this.noteRenderTimer = window.setTimeout(() => {
+      this.noteRenderTimer = null;
+      if (requestId !== this.noteRenderRequestId) {
+        return;
+      }
       void this.renderMarkdown(markdown);
     }, 60);
   }
@@ -3549,7 +3819,7 @@ export class MindmapView extends ItemView {
 
   private async syncNow(): Promise<void> {
     await this.flushSave();
-    new Notice("已立即写入文件，等待 iCloud 同步");
+    // new Notice("已立即写入文件，等待 iCloud 同步");
   }
 
   private async reloadFromDisk(showNotice: boolean): Promise<void> {
@@ -3570,7 +3840,7 @@ export class MindmapView extends ItemView {
       }
       this.renderMindmap();
       if (showNotice) {
-        new Notice("已从磁盘重新加载导图");
+        // new Notice("已从磁盘重新加载导图");
       }
     } finally {
       window.setTimeout(() => {
@@ -3595,14 +3865,14 @@ export class MindmapView extends ItemView {
         const url = new URL(input);
         const fileParam = url.searchParams.get("file");
         if (!fileParam) {
-          new Notice(`无法解析链接：${input}`);
+          // new Notice(`无法解析链接：${input}`);
           return;
         }
         const decodedPath = normalizePath(decodeURIComponent(fileParam));
         await this.openInternalTarget(decodedPath, true);
         return;
       } catch {
-        new Notice(`无法解析链接：${input}`);
+        // new Notice(`无法解析链接：${input}`);
         return;
       }
     }
@@ -3624,7 +3894,7 @@ export class MindmapView extends ItemView {
         }
       }
     } catch {
-      new Notice(`未找到目标文件：${normalized}`);
+      // new Notice(`未找到目标文件：${normalized}`);
     }
   }
 
@@ -3693,7 +3963,7 @@ export class MindmapView extends ItemView {
   private async goBackFromLinkedTarget(): Promise<void> {
     const previousPath = this.navigationStack.pop();
     if (!previousPath) {
-      new Notice("没有可返回的上一个位置");
+      // new Notice("没有可返回的上一个位置");
       return;
     }
 
@@ -3762,7 +4032,7 @@ export class MindmapView extends ItemView {
       return;
     }
     if (this.doc.root.id === nodeId) {
-      new Notice("根节点不可删除");
+      // new Notice("根节点不可删除");
       return;
     }
     const node = findNodeById(this.doc, nodeId);
@@ -3778,7 +4048,7 @@ export class MindmapView extends ItemView {
     this.captureHistorySnapshot();
     const result = removeNode(this.doc, nodeId);
     if (!result) {
-      new Notice("删除失败：未找到节点");
+      // new Notice("删除失败：未找到节点");
       return;
     }
     const shouldCloseDrawer = this.selectedNodeId === nodeId;
@@ -4234,7 +4504,7 @@ export class MindmapView extends ItemView {
 
   private async savePastedImage(file: File): Promise<string | null> {
     if (!this.file) {
-      new Notice("请先保存导图文件后再粘贴图片");
+      // new Notice("请先保存导图文件后再粘贴图片");
       return null;
     }
 
@@ -4282,6 +4552,7 @@ export class MindmapView extends ItemView {
   }
 
   private clearCanvasSelection(): void {
+    this.collapseMobileGlobalActions();
     if (this.selectedNodeId === null && this.editingNodeId === null && this.selectedNodeIds.size === 0) {
       return;
     }
