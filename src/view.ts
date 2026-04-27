@@ -1,3 +1,9 @@
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap, placeholder } from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from "@codemirror/commands";
+import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { markdown } from "@codemirror/lang-markdown";
+import { searchKeymap } from "@codemirror/search";
 import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, TFile, TFolder, normalizePath, type ViewStateResult } from "obsidian";
 import { addChildNode, findNodeById, findParentOfNode, normalizeMindmapDocument, removeNode, reorderNodeWithinParent, reparentNode, visibleNodes, walkNodes } from "./store";
 import { createDefaultMindmap, type MindmapDocument, type MindmapNode } from "./types";
@@ -177,6 +183,9 @@ export class MindmapView extends ItemView {
   private noteModeToggleEl!: HTMLButtonElement;
   private nodeLinkInputEl!: HTMLInputElement;
   private noteSurfaceEl!: HTMLDivElement;
+  private noteEditorHostEl!: HTMLDivElement;
+  private noteEditorView: EditorView | null = null;
+  private isSyncingNoteEditor = false;
   private noteInputEl!: HTMLTextAreaElement;
   private notePreviewEl!: HTMLDivElement;
   private svgEl!: SVGSVGElement;
@@ -1803,10 +1812,17 @@ export class MindmapView extends ItemView {
       this.renderMindmap();
     });
     this.noteSurfaceEl = this.drawerEl.createDiv({ cls: "mindmap-note-surface" });
+    this.noteEditorHostEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-editor-host" });
     this.noteInputEl = this.noteSurfaceEl.createEl("textarea", {
       cls: "mindmap-note-input"
     });
     this.noteInputEl.placeholder = "使用 Markdown 记录节点笔记...";
+    if (!this.isMobileLayout) {
+      this.noteInputEl.addClass("is-codemirror-backed");
+      this.createNoteEditor();
+    } else {
+      this.noteEditorHostEl.addClass("is-hidden");
+    }
     this.notePreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-preview markdown-preview-view" });
 
     this.noteInputEl.addEventListener("focus", () => {
@@ -1816,6 +1832,9 @@ export class MindmapView extends ItemView {
       window.setTimeout(() => this.updateMobileActionClusterVisibility(), 0);
     });
     this.noteInputEl.addEventListener("input", () => {
+      if (!this.isMobileLayout) {
+        return;
+      }
       if (!this.doc || !this.selectedNodeId) {
         return;
       }
@@ -1832,7 +1851,9 @@ export class MindmapView extends ItemView {
       this.requestSave();
     });
     this.noteInputEl.addEventListener("paste", (event) => {
-      void this.handlePaste(event);
+      if (this.isMobileLayout) {
+        void this.handlePaste(event);
+      }
     });
     this.noteInputEl.addEventListener("keydown", (event) => {
       if (event.key === "Tab") {
@@ -1936,6 +1957,8 @@ export class MindmapView extends ItemView {
       window.cancelAnimationFrame(this.pendingRenderFrame);
       this.pendingRenderFrame = null;
     }
+    this.noteEditorView?.destroy();
+    this.noteEditorView = null;
     await this.flushSave();
   }
 
@@ -3128,6 +3151,7 @@ export class MindmapView extends ItemView {
     this.nodeLinkInputEl.placeholder = isRootNode ? "中心节点链接由跳转来源自动维护" : "输入链接目标：导图或笔记路径";
     this.nodeLinkInputEl.setAttribute("aria-readonly", isRootNode ? "true" : "false");
     this.updateNodeLinkActionButton(node.linkTarget ?? "");
+    this.setNoteEditorValue(node.note ?? "");
     this.noteInputEl.value = node.note ?? "";
     await this.renderMarkdown(node.note ?? "");
     this.setNoteEditing(false);
@@ -3277,6 +3301,100 @@ export class MindmapView extends ItemView {
     window.setTimeout(() => {
       void this.renderMarkdown(markdown);
     }, 60);
+  }
+
+  private createNoteEditor(): void {
+    if (this.noteEditorView || !this.noteEditorHostEl) {
+      return;
+    }
+    const updateListener = EditorView.updateListener.of((update) => {
+      if (!update.docChanged || this.isSyncingNoteEditor) {
+        return;
+      }
+      this.handleNoteEditorInput(update.state.doc.toString());
+    });
+    const pasteHandler = EditorView.domEventHandlers({
+      paste: (event) => {
+        void this.handlePaste(event as ClipboardEvent);
+        return false;
+      }
+    });
+    const closePreviewKeymap = keymap.of([
+      {
+        key: "Mod-Enter",
+        run: () => {
+          this.setNoteEditing(false);
+          return true;
+        }
+      },
+      {
+        key: "Tab",
+        run: (view) => indentMore(view),
+        shift: (view) => indentLess(view)
+      }
+    ]);
+    this.noteEditorView = new EditorView({
+      parent: this.noteEditorHostEl,
+      state: EditorState.create({
+        doc: "",
+        extensions: [
+          history(),
+          markdown(),
+          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          placeholder("使用 Markdown 记录节点笔记..."),
+          closePreviewKeymap,
+          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          updateListener,
+          pasteHandler,
+          EditorView.lineWrapping,
+          EditorView.theme({
+            "&": { height: "100%" },
+            ".cm-scroller": { fontFamily: "var(--font-text)", lineHeight: "1.55" },
+            ".cm-content": { minHeight: "100%" }
+          })
+        ]
+      })
+    });
+  }
+
+  private setNoteEditorValue(markdown: string): void {
+    if (!this.noteEditorView) {
+      return;
+    }
+    const currentValue = this.noteEditorView.state.doc.toString();
+    if (currentValue === markdown) {
+      return;
+    }
+    this.isSyncingNoteEditor = true;
+    try {
+      this.noteEditorView.dispatch({
+        changes: {
+          from: 0,
+          to: this.noteEditorView.state.doc.length,
+          insert: markdown
+        }
+      });
+    } finally {
+      this.isSyncingNoteEditor = false;
+    }
+  }
+
+  private handleNoteEditorInput(markdown: string): void {
+    if (!this.doc || !this.selectedNodeId) {
+      return;
+    }
+    const node = findNodeById(this.doc, this.selectedNodeId);
+    if (!node) {
+      return;
+    }
+    if (!this.noteHistoryCapturedForSession) {
+      this.captureHistorySnapshot();
+      this.noteHistoryCapturedForSession = true;
+    }
+    node.note = markdown;
+    this.noteInputEl.value = markdown;
+    this.scheduleMarkdownRender(node.note ?? "");
+    this.requestSave();
   }
 
   private prepareMarkdownForPreview(markdown: string): string {
@@ -4011,21 +4129,36 @@ export class MindmapView extends ItemView {
       }
       this.insertTextAtCursor(`\n${markdownLink}\n`);
     }
-    this.noteInputEl.dispatchEvent(new Event("input"));
-    const latestMarkdown = this.noteInputEl.value;
+    const latestMarkdown = this.getCurrentNoteEditorValue();
+    this.handleNoteEditorInput(latestMarkdown);
     window.setTimeout(() => {
-      if (this.noteInputEl?.value === latestMarkdown) {
+      if (this.getCurrentNoteEditorValue() === latestMarkdown) {
         void this.renderMarkdown(latestMarkdown);
       }
     }, 180);
     window.setTimeout(() => {
-      if (this.noteInputEl?.value === latestMarkdown) {
+      if (this.getCurrentNoteEditorValue() === latestMarkdown) {
         void this.renderMarkdown(latestMarkdown);
       }
     }, 600);
   }
 
+  private getCurrentNoteEditorValue(): string {
+    return this.noteEditorView?.state.doc.toString() ?? this.noteInputEl.value;
+  }
+
   private insertTextAtCursor(text: string): void {
+    if (this.noteEditorView && !this.isMobileLayout) {
+      const view = this.noteEditorView;
+      const selection = view.state.selection.main;
+      view.dispatch({
+        changes: { from: selection.from, to: selection.to, insert: text },
+        selection: { anchor: selection.from + text.length },
+        scrollIntoView: true
+      });
+      view.focus();
+      return;
+    }
     const input = this.noteInputEl;
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? input.value.length;
@@ -4116,9 +4249,16 @@ export class MindmapView extends ItemView {
     this.updateMobileActionClusterVisibility();
     if (editing) {
       this.notePreviewEl.addClass("is-live-hidden");
-      window.setTimeout(() => this.noteInputEl.focus({ preventScroll: true }), 0);
+      window.setTimeout(() => {
+        if (this.noteEditorView && !this.isMobileLayout) {
+          this.noteEditorView.focus();
+          return;
+        }
+        this.noteInputEl.focus({ preventScroll: true });
+      }, 0);
       return;
     }
+    this.noteEditorView?.contentDOM.blur();
     this.noteInputEl.blur();
     this.notePreviewEl.removeClass("is-live-hidden");
     this.focusContainerWithoutScroll();
@@ -4149,7 +4289,7 @@ export class MindmapView extends ItemView {
     if (!this.isMobileLayout || !this.mobileActionClusterEl) {
       return;
     }
-    const noteInputFocused = document.activeElement === this.noteInputEl;
+    const noteInputFocused = document.activeElement === this.noteInputEl || (this.noteEditorView?.hasFocus ?? false);
     const noteDrawerEditing = !this.drawerEl?.hasClass("is-hidden") && this.noteSurfaceEl?.hasClass("is-editing");
     const hidden = this.editingNodeId !== null || noteInputFocused || noteDrawerEditing;
     this.mobileActionClusterEl.toggleClass("is-editing-hidden", hidden);
