@@ -1691,6 +1691,19 @@ class MindmapView extends obsidian_1.ItemView {
             type: "text"
         });
         this.nodeLinkInputEl.placeholder = "输入链接目标：导图或笔记路径";
+        this.nodeLinkClearButtonEl = nodeLinkActionsEl.createEl("button", {
+            cls: "mindmap-node-link-clear-button is-hidden",
+            text: "×"
+        });
+        this.nodeLinkClearButtonEl.type = "button";
+        this.nodeLinkClearButtonEl.setAttribute("aria-label", "清除链接");
+        this.nodeLinkClearButtonEl.addEventListener("click", () => {
+            if (!this.doc || !this.selectedNodeId) {
+                return;
+            }
+            this.clearNodeLink(this.selectedNodeId);
+            this.nodeLinkInputEl.focus({ preventScroll: true });
+        });
         this.nodeLinkActionButtonEl = nodeLinkActionsEl.createEl("button", {
             cls: "mindmap-node-link-action-button is-disabled",
             text: "跳转"
@@ -1709,7 +1722,7 @@ class MindmapView extends obsidian_1.ItemView {
             void this.openLinkedTarget(node.linkTarget);
         });
         this.nodeLinkInputEl.addEventListener("input", () => {
-            if (!this.doc || !this.selectedNodeId || this.selectedNodeId === this.doc.root.id) {
+            if (!this.doc || !this.selectedNodeId) {
                 return;
             }
             const node = (0, store_1.findNodeById)(this.doc, this.selectedNodeId);
@@ -3110,6 +3123,8 @@ class MindmapView extends obsidian_1.ItemView {
         this.nodeLinkActionButtonEl.disabled = !hasLink;
         this.nodeLinkActionButtonEl.toggleClass("is-disabled", !hasLink);
         this.nodeLinkActionButtonEl.setAttribute("aria-disabled", hasLink ? "false" : "true");
+        this.nodeLinkClearButtonEl?.toggleClass("is-hidden", !hasLink);
+        this.nodeLinkClearButtonEl?.toggleAttribute("hidden", !hasLink);
     }
     updateMobileActionButtons() {
         if (!this.isMobileLayout || !this.mobileActionClusterEl) {
@@ -3827,7 +3842,9 @@ class MindmapView extends obsidian_1.ItemView {
         node.linkTarget = "";
         if (this.selectedNodeId === nodeId) {
             this.nodeLinkInputEl.value = "";
+            this.updateNodeLinkActionButton("");
         }
+        this.updateMobileActionButtons();
         this.requestSave();
         this.renderMindmap();
     }

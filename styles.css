@@ -1229,9 +1229,36 @@
    margin-bottom: 2px;
  }
 
- .mindmap-node-link-action-button {
+ .mindmap-node-link-action-button,
+ .mindmap-node-link-clear-button {
    flex-shrink: 0;
    white-space: nowrap;
+ }
+
+ .mindmap-node-link-clear-button {
+   width: 30px;
+   height: 30px;
+   padding: 0;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 999px;
+   background: var(--background-primary);
+   color: var(--text-muted);
+   font-size: 18px;
+   font-weight: 700;
+   line-height: 1;
+   cursor: pointer;
+ }
+
+ .mindmap-node-link-clear-button:hover,
+ .mindmap-node-link-clear-button:focus-visible {
+   color: var(--text-normal);
+   border-color: var(--interactive-accent);
+   outline: none;
+ }
+
+ .mindmap-node-link-clear-button.is-hidden,
+ .mindmap-node-link-clear-button[hidden] {
+   display: none;
  }
 
  .mindmap-node-link-action-button.is-disabled,

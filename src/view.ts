@@ -187,6 +187,7 @@ export class MindmapView extends ItemView {
   private noteModeToggleEl!: HTMLButtonElement;
   private noteTocEl!: HTMLDivElement;
   private nodeLinkInputEl!: HTMLInputElement;
+  private nodeLinkClearButtonEl!: HTMLButtonElement;
   private noteSurfaceEl!: HTMLDivElement;
   private noteEditorHostEl!: HTMLDivElement;
   private noteEditorView: EditorView | null = null;
@@ -1867,6 +1868,19 @@ export class MindmapView extends ItemView {
       type: "text"
     });
     this.nodeLinkInputEl.placeholder = "输入链接目标：导图或笔记路径";
+    this.nodeLinkClearButtonEl = nodeLinkActionsEl.createEl("button", {
+      cls: "mindmap-node-link-clear-button is-hidden",
+      text: "×"
+    });
+    this.nodeLinkClearButtonEl.type = "button";
+    this.nodeLinkClearButtonEl.setAttribute("aria-label", "清除链接");
+    this.nodeLinkClearButtonEl.addEventListener("click", () => {
+      if (!this.doc || !this.selectedNodeId) {
+        return;
+      }
+      this.clearNodeLink(this.selectedNodeId);
+      this.nodeLinkInputEl.focus({ preventScroll: true });
+    });
     this.nodeLinkActionButtonEl = nodeLinkActionsEl.createEl("button", {
       cls: "mindmap-node-link-action-button is-disabled",
       text: "跳转"
@@ -1885,7 +1899,7 @@ export class MindmapView extends ItemView {
       void this.openLinkedTarget(node.linkTarget);
     });
     this.nodeLinkInputEl.addEventListener("input", () => {
-      if (!this.doc || !this.selectedNodeId || this.selectedNodeId === this.doc.root.id) {
+      if (!this.doc || !this.selectedNodeId) {
         return;
       }
       const node = findNodeById(this.doc, this.selectedNodeId);
@@ -3386,6 +3400,8 @@ export class MindmapView extends ItemView {
     this.nodeLinkActionButtonEl.disabled = !hasLink;
     this.nodeLinkActionButtonEl.toggleClass("is-disabled", !hasLink);
     this.nodeLinkActionButtonEl.setAttribute("aria-disabled", hasLink ? "false" : "true");
+    this.nodeLinkClearButtonEl?.toggleClass("is-hidden", !hasLink);
+    this.nodeLinkClearButtonEl?.toggleAttribute("hidden", !hasLink);
   }
 
   private updateMobileActionButtons(): void {
@@ -4147,7 +4163,9 @@ export class MindmapView extends ItemView {
     node.linkTarget = "";
     if (this.selectedNodeId === nodeId) {
       this.nodeLinkInputEl.value = "";
+      this.updateNodeLinkActionButton("");
     }
+    this.updateMobileActionButtons();
     this.requestSave();
     this.renderMindmap();
   }
