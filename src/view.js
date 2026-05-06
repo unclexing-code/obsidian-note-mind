@@ -623,6 +623,14 @@ class MindmapView extends obsidian_1.ItemView {
                 return;
             }
             const markdownText = event.clipboardData.getData("text/plain");
+            if (markdownText.trim().length > 0 && this.markdownToMindmapDocument(markdownText) !== null) {
+                this.clearClipboardPayload();
+                const handled = await this.applyMarkdownTextAsMindmap(markdownText, true, true);
+                if (handled) {
+                    event.preventDefault();
+                }
+                return;
+            }
             const handled = await this.applyMarkdownTextAsMindmap(markdownText, true);
             if (handled) {
                 event.preventDefault();
@@ -691,6 +699,9 @@ class MindmapView extends obsidian_1.ItemView {
         catch {
             return null;
         }
+    }
+    clearClipboardPayload() {
+        window.localStorage.removeItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY);
     }
     hasClipboardSubtree() {
         return !!this.getClipboardPayload();
@@ -4165,8 +4176,8 @@ class MindmapView extends obsidian_1.ItemView {
         this.renderMindmap();
         return true;
     }
-    async applyMarkdownTextAsMindmap(markdownText, requireConfirmForNonDefault = true) {
-        if (!this.doc || !markdownText.trim() || !this.shouldTreatClipboardAsMindmapMarkdown(markdownText)) {
+    async applyMarkdownTextAsMindmap(markdownText, requireConfirmForNonDefault = true, forceMarkdown = false) {
+        if (!this.doc || !markdownText.trim() || (!forceMarkdown && !this.shouldTreatClipboardAsMindmapMarkdown(markdownText))) {
             return false;
         }
         const nextDoc = this.markdownToMindmapDocument(markdownText);
@@ -4205,9 +4216,13 @@ class MindmapView extends obsidian_1.ItemView {
         }
         try {
             const markdownText = await navigator.clipboard.readText();
-            const handled = await this.applyMarkdownTextAsMindmap(markdownText, true);
-            if (handled) {
-                return;
+            const shouldUseMarkdown = markdownText.trim().length > 0 && this.markdownToMindmapDocument(markdownText) !== null;
+            if (shouldUseMarkdown) {
+                this.clearClipboardPayload();
+                const handled = await this.applyMarkdownTextAsMindmap(markdownText, true, true);
+                if (handled) {
+                    return;
+                }
             }
         }
         catch {

@@ -144,6 +144,7 @@ class MindmapAssociationModal extends Modal {
 
 export class MindmapView extends ItemView {
   private static readonly MINDMAP_CLIPBOARD_STORAGE_KEY = "obsidian-note-mind:clipboard";
+  private static readonly MINDMAP_CLIPBOARD_TEXT_PREFIX = "obsidian-note-mind:node-clipboard:";
   private static readonly DEFAULT_NODE_WIDTH = 160;
   private static readonly DEFAULT_NODE_HEIGHT = 44;
   private static readonly MIN_NODE_WIDTH = 120;
@@ -346,6 +347,18 @@ export class MindmapView extends ItemView {
     }
   };
   private shouldIgnoreMindmapShortcuts(event: KeyboardEvent): boolean {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement) {
+      if (activeElement.isContentEditable || activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+        return true;
+      }
+      if (activeElement.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer, .cm-editor, .cm-content")) {
+        return true;
+      }
+    }
+    if (this.noteEditorView?.hasFocus || (!this.drawerEl.hasClass("is-hidden") && this.noteSurfaceEl.hasClass("is-editing"))) {
+      return true;
+    }
     const target = event.target;
     if (!(target instanceof HTMLElement)) {
       return false;
@@ -356,7 +369,7 @@ export class MindmapView extends ItemView {
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
       return true;
     }
-    if (target.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer")) {
+    if (target.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer, .cm-editor, .cm-content")) {
       return true;
     }
     return false;
@@ -414,6 +427,55 @@ export class MindmapView extends ItemView {
     }
   }
 
+  private getClipboardPayloadFromText(text: string): MindmapClipboardPayload | null {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith(MindmapView.MINDMAP_CLIPBOARD_TEXT_PREFIX)) {
+      return null;
+    }
+    try {
+      const encoded = trimmed.slice(MindmapView.MINDMAP_CLIPBOARD_TEXT_PREFIX.length);
+      const decoded = decodeURIComponent(escape(window.atob(encoded)));
+      const parsed = JSON.parse(decoded) as Partial<MindmapClipboardPayload>;
+      if (parsed.version !== 1 || (!parsed.subtree && !parsed.forest?.length)) {
+        return null;
+      }
+      const forest = Array.isArray(parsed.forest)
+        ? parsed.forest.map((node) => this.cloneNode(node as MindmapNode))
+        : parsed.subtree
+          ? [this.cloneNode(parsed.subtree as MindmapNode)]
+          : [];
+      if (forest.length === 0) {
+        return null;
+      }
+      return {
+        version: 1,
+        sourcePath: typeof parsed.sourcePath === "string" ? parsed.sourcePath : null,
+        subtree: forest[0],
+        forest,
+        operation: parsed.operation === "cut" ? "cut" : "copy"
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private writeClipboardPayloadToSystemClipboard(payload: MindmapClipboardPayload): void {
+    try {
+      const text = `${MindmapView.MINDMAP_CLIPBOARD_TEXT_PREFIX}${window.btoa(unescape(encodeURIComponent(JSON.stringify(payload))))}`;
+      void navigator.clipboard?.writeText(text);
+    } catch {
+      // ignore clipboard write failures; local clipboard remains available
+    }
+  }
+
+  private clearClipboardPayload(): void {
+    window.localStorage.removeItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY);
+  }
+
+  private storeClipboardPayload(payload: MindmapClipboardPayload): void {
+    window.localStorage.setItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY, JSON.stringify(payload));
+  }
+
   private hasClipboardSubtree(): boolean {
     return !!this.getClipboardPayload();
   }
@@ -431,7 +493,8 @@ export class MindmapView extends ItemView {
       forest,
       operation
     };
-    window.localStorage.setItem(MindmapView.MINDMAP_CLIPBOARD_STORAGE_KEY, JSON.stringify(payload));
+    this.storeClipboardPayload(payload);
+    this.writeClipboardPayloadToSystemClipboard(payload);
   }
 
   private getSelectedOperationRootIds(): string[] {
@@ -1649,7 +1712,6 @@ export class MindmapView extends ItemView {
     this.containerEl.toggleClass("is-mobile", this.isMobileLayout);
     this.containerEl.tabIndex = 0;
     this.containerEl.addEventListener("keydown", this.onKeydown);
-    this.containerEl.addEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     if (this.isMobileLayout) {
       this.containerEl.addEventListener("pointerdown", this.activateMindmapLeaf);
       this.containerEl.addEventListener("touchstart", this.activateMindmapLeaf, { passive: true });
@@ -1672,6 +1734,7 @@ export class MindmapView extends ItemView {
     this.layoutEl = this.containerEl.createDiv({ cls: "mindmap-layout" });
     this.updateDrawerWidth();
     this.canvasEl = this.layoutEl.createDiv({ cls: "mindmap-canvas" });
+    this.canvasEl.addEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     this.marqueeEl = this.canvasEl.createDiv({ cls: "mindmap-selection-marquee is-hidden" });
     this.desktopActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-desktop-action-cluster" });
     // this.desktopSyncButtonEl = this.desktopActionClusterEl.createEl("button", { cls: "mindmap-desktop-sync-button", text: "同步" });
@@ -2034,7 +2097,7 @@ export class MindmapView extends ItemView {
 
   async onClose(): Promise<void> {
     this.containerEl.removeEventListener("keydown", this.onKeydown);
-    this.containerEl.removeEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
+    this.canvasEl?.removeEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     if (this.isMobileLayout) {
       this.setZenMode(false);
       this.containerEl.removeEventListener("pointerdown", this.activateMindmapLeaf);
@@ -4543,8 +4606,8 @@ export class MindmapView extends ItemView {
     return true;
   }
 
-  private async applyMarkdownTextAsMindmap(markdownText: string, requireConfirmForNonDefault = true): Promise<boolean> {
-    if (!this.doc || !markdownText.trim() || !this.shouldTreatClipboardAsMindmapMarkdown(markdownText)) {
+  private async applyMarkdownTextAsMindmap(markdownText: string, requireConfirmForNonDefault = true, forceMarkdown = false): Promise<boolean> {
+    if (!this.doc || !markdownText.trim() || (!forceMarkdown && !this.shouldTreatClipboardAsMindmapMarkdown(markdownText))) {
       return false;
     }
     const nextDoc = this.markdownToMindmapDocument(markdownText);
@@ -4577,16 +4640,38 @@ export class MindmapView extends ItemView {
     return true;
   }
 
+  private shouldIgnoreMindmapPasteTarget(target: EventTarget | null): boolean {
+    const activeElement = document.activeElement;
+    if (activeElement instanceof Element && activeElement.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer, .cm-editor, .cm-content")) {
+      return true;
+    }
+    if (this.noteEditorView?.hasFocus || (!this.drawerEl.hasClass("is-hidden") && this.noteSurfaceEl.hasClass("is-editing"))) {
+      return true;
+    }
+    return target instanceof Element && !!target.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer, .mindmap-node-inline-input, .cm-editor, .cm-content");
+  }
+
   private async handleMindmapPasteShortcut(): Promise<void> {
-    const target = document.activeElement;
-    if (target instanceof Element && target.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer, .mindmap-node-inline-input")) {
+    if (this.shouldIgnoreMindmapPasteTarget(document.activeElement)) {
       return;
     }
     try {
-      const markdownText = await navigator.clipboard.readText();
-      const handled = await this.applyMarkdownTextAsMindmap(markdownText, true);
-      if (handled) {
+      const clipboardText = await navigator.clipboard.readText();
+      const nodePayload = this.getClipboardPayloadFromText(clipboardText);
+      if (nodePayload) {
+        this.storeClipboardPayload(nodePayload);
+        if (this.selectedNodeId) {
+          this.pasteClipboardSubtreeToNode(this.selectedNodeId);
+        }
         return;
+      }
+      const shouldUseMarkdown = clipboardText.trim().length > 0 && this.markdownToMindmapDocument(clipboardText) !== null;
+      if (shouldUseMarkdown) {
+        this.clearClipboardPayload();
+        const handled = await this.applyMarkdownTextAsMindmap(clipboardText, true, true);
+        if (handled) {
+          return;
+        }
       }
     } catch {
       // ignore clipboard read failures and fall back to internal subtree paste
@@ -4600,12 +4685,28 @@ export class MindmapView extends ItemView {
     if (!event.clipboardData || !this.doc) {
       return;
     }
-    const target = event.target;
-    if (target instanceof Element && target.closest("input, textarea, [contenteditable='true'], [contenteditable=''], .mindmap-drawer, .mindmap-node-inline-input")) {
+    if (this.shouldIgnoreMindmapPasteTarget(event.target)) {
       return;
     }
-    const markdownText = event.clipboardData.getData("text/plain");
-    const handled = await this.applyMarkdownTextAsMindmap(markdownText, true);
+    const clipboardText = event.clipboardData.getData("text/plain");
+    const nodePayload = this.getClipboardPayloadFromText(clipboardText);
+    if (nodePayload) {
+      this.storeClipboardPayload(nodePayload);
+      if (this.selectedNodeId) {
+        this.pasteClipboardSubtreeToNode(this.selectedNodeId);
+        event.preventDefault();
+      }
+      return;
+    }
+    if (clipboardText.trim().length > 0 && this.markdownToMindmapDocument(clipboardText) !== null) {
+      this.clearClipboardPayload();
+      const handled = await this.applyMarkdownTextAsMindmap(clipboardText, true, true);
+      if (handled) {
+        event.preventDefault();
+      }
+      return;
+    }
+    const handled = await this.applyMarkdownTextAsMindmap(clipboardText, true);
     if (handled) {
       event.preventDefault();
     }
