@@ -186,6 +186,7 @@ export class MindmapView extends ItemView {
   private drawerTitleEl!: HTMLHeadingElement;
   private drawerCloseEl!: HTMLButtonElement;
   private noteModeToggleEl!: HTMLButtonElement;
+  private noteToolbarEl!: HTMLDivElement;
   private noteTocEl!: HTMLDivElement;
   private nodeLinkInputEl!: HTMLInputElement;
   private nodeLinkClearButtonEl!: HTMLButtonElement;
@@ -1086,11 +1087,23 @@ export class MindmapView extends ItemView {
     }
   }
 
+  private isMobileNoteDrawerOpen(): boolean {
+    return this.isMobileLayout && !!this.drawerEl && !this.drawerEl.hasClass("is-hidden");
+  }
+
+  private shouldLockMobileOuterGesture(): boolean {
+    return this.isZenMode || this.isMobileNoteDrawerOpen();
+  }
+
   private readonly onWindowTouchStart = (event: TouchEvent): void => {
-    if (!this.isZenMode || !this.isMobileLayout) {
+    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture()) {
       return;
     }
     const target = event.target;
+    if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
+      event.stopPropagation();
+      return;
+    }
     if (target instanceof Element && target.closest(".mindmap-canvas")) {
       event.stopPropagation();
       this.onTouchStart(event, true);
@@ -1104,10 +1117,14 @@ export class MindmapView extends ItemView {
   };
 
   private readonly onWindowTouchMove = (event: TouchEvent): void => {
-    if (!this.isZenMode || !this.isMobileLayout) {
+    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture()) {
       return;
     }
     const target = event.target;
+    if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
+      event.stopPropagation();
+      return;
+    }
     if (target instanceof Element && target.closest(".mindmap-canvas")) {
       event.stopPropagation();
       this.onTouchMove(event, true);
@@ -1121,10 +1138,14 @@ export class MindmapView extends ItemView {
   };
 
   private readonly onWindowTouchEnd = (event: TouchEvent): void => {
-    if (!this.isZenMode || !this.isMobileLayout) {
+    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture()) {
       return;
     }
     const target = event.target;
+    if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
+      event.stopPropagation();
+      return;
+    }
     if (target instanceof Element && target.closest(".mindmap-canvas")) {
       event.stopPropagation();
       this.onTouchEnd(event, true);
@@ -1978,6 +1999,21 @@ export class MindmapView extends ItemView {
       this.requestSave();
       this.renderMindmap();
     });
+    this.noteToolbarEl = this.drawerEl.createDiv({ cls: "mindmap-mobile-note-toolbar" });
+    [
+      { label: "H1", action: "h1" },
+      { label: "H2", action: "h2" },
+      { label: "• 列表", action: "ul" },
+      { label: "1. 列表", action: "ol" },
+      { label: "加粗", action: "bold" }
+    ].forEach((buttonConfig) => {
+      const buttonEl = this.noteToolbarEl.createEl("button", { text: buttonConfig.label });
+      buttonEl.type = "button";
+      buttonEl.addEventListener("click", () => this.applyMobileNoteToolbarAction(buttonConfig.action));
+    });
+    if (!this.isMobileLayout) {
+      this.noteToolbarEl.addClass("is-hidden");
+    }
     this.noteSurfaceEl = this.drawerEl.createDiv({ cls: "mindmap-note-surface" });
     this.noteEditorHostEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-editor-host" });
     this.noteInputEl = this.noteSurfaceEl.createEl("textarea", {
@@ -3433,6 +3469,10 @@ export class MindmapView extends ItemView {
     this.editingNodeId = null;
     this.drawerEl.removeClass("is-hidden");
     this.layoutEl.addClass("has-drawer");
+    if (this.isMobileLayout) {
+      document.body.addClass("mindmap-mobile-note-lock");
+      document.documentElement.addClass("mindmap-mobile-note-lock");
+    }
     this.updateMobileActionButtons();
     await this.syncDrawerToNode(node.id);
     this.updateMobileActionClusterVisibility();
@@ -4773,6 +4813,55 @@ export class MindmapView extends ItemView {
     input.setRangeText(text, start, end, "end");
   }
 
+  private applyMobileNoteToolbarAction(action: string): void {
+    if (!this.isMobileLayout) {
+      return;
+    }
+    this.setNoteEditing(true);
+    const input = this.noteInputEl;
+    input.focus({ preventScroll: true });
+    if (action === "bold") {
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? input.value.length;
+      const selected = input.value.slice(start, end) || "加粗文字";
+      input.setRangeText(`**${selected}**`, start, end, "select");
+      input.dispatchEvent(new Event("input"));
+      return;
+    }
+    const transform = (line: string, index: number): string => {
+      const cleaned = line.replace(/^\s*(#{1,6}\s+|-\s+|\d+\.\s+)/, "");
+      if (action === "h1") {
+        return `# ${cleaned || "标题"}`;
+      }
+      if (action === "h2") {
+        return `## ${cleaned || "标题"}`;
+      }
+      if (action === "ul") {
+        return `- ${cleaned}`;
+      }
+      if (action === "ol") {
+        return `${index + 1}. ${cleaned}`;
+      }
+      return line;
+    };
+    this.transformSelectedNoteLines(transform);
+  }
+
+  private transformSelectedNoteLines(transform: (line: string, index: number) => string): void {
+    const input = this.noteInputEl;
+    const value = input.value;
+    const selectionStart = input.selectionStart ?? 0;
+    const selectionEnd = input.selectionEnd ?? 0;
+    const lineStart = value.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
+    const nextLineBreak = value.indexOf("\n", selectionEnd);
+    const lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak;
+    const selectedBlock = value.slice(lineStart, lineEnd);
+    const lines = selectedBlock.length > 0 ? selectedBlock.split("\n") : [""];
+    const replacement = lines.map(transform).join("\n");
+    input.setRangeText(replacement, lineStart, lineEnd, "select");
+    input.dispatchEvent(new Event("input"));
+  }
+
   private indentNoteSelection(outdent: boolean): void {
     const input = this.noteInputEl;
     const value = input.value;
@@ -4875,6 +4964,10 @@ export class MindmapView extends ItemView {
   private closeDrawer(): void {
     this.drawerEl.addClass("is-hidden");
     this.layoutEl.removeClass("has-drawer");
+    if (this.isMobileLayout) {
+      document.body.removeClass("mindmap-mobile-note-lock");
+      document.documentElement.removeClass("mindmap-mobile-note-lock");
+    }
     this.noteHistoryCapturedForSession = false;
     this.linkHistoryCapturedForSession = false;
     this.setNoteEditing(false);

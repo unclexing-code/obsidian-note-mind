@@ -1219,6 +1219,38 @@
    transition: background 220ms ease;
  }
 
+ .mindmap-mobile-note-toolbar {
+   display: flex;
+   gap: 6px;
+   overflow-x: auto;
+   padding: 4px 0 6px;
+   flex: 0 0 auto;
+   -webkit-overflow-scrolling: touch;
+ }
+
+ .mindmap-mobile-note-toolbar.is-hidden {
+   display: none;
+ }
+
+ .mindmap-mobile-note-toolbar button {
+   flex: 0 0 auto;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 999px;
+   padding: 5px 10px;
+   background: var(--background-primary);
+   color: var(--text-normal);
+   font-size: 12px;
+   line-height: 1.2;
+ }
+
+ .mindmap-mobile-note-toolbar button:active {
+   background: var(--background-modifier-hover);
+ }
+
+ .mindmap-mobile-note-lock {
+   overscroll-behavior-x: none;
+ }
+
  .mindmap-node-link-actions {
    display: flex;
    align-items: center;
