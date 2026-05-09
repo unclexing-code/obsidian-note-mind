@@ -2060,12 +2060,32 @@ export class MindmapView extends ItemView {
     }
     this.notePreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-preview markdown-preview-view" });
     this.notePreviewEl.addEventListener("copy", (event) => this.handleNotePreviewCopy(event));
+    this.notePreviewEl.addEventListener("dblclick", (event) => {
+      if (!this.doc || !this.selectedNodeId) {
+        return;
+      }
+      const editing = !this.noteSurfaceEl.hasClass("is-editing");
+      if (editing) {
+        // Capture click position before switching to edit mode
+        const clickPosition = this.findMarkdownPositionFromPreviewClick(event);
+        this.setNoteEditing(editing, clickPosition);
+      } else {
+        this.setNoteEditing(editing);
+      }
+    });
     this.noteTocEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-toc is-empty is-collapsed" });
     this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
 
     this.noteInputEl.addEventListener("focus", () => {
       this.updateMobileActionClusterVisibility();
       this.updateNoteSelectionToolbar();
+    });
+    this.noteInputEl.addEventListener("dblclick", () => {
+      if (!this.doc || !this.selectedNodeId) {
+        return;
+      }
+      const editing = !this.noteSurfaceEl.hasClass("is-editing");
+      this.setNoteEditing(editing);
     });
     this.noteInputEl.addEventListener("blur", () => {
       window.setTimeout(() => {
@@ -3670,6 +3690,110 @@ export class MindmapView extends ItemView {
     }, 0);
   }
 
+  private findMarkdownPositionFromPreviewClick(event: MouseEvent): number {
+    const markdown = this.notePreviewEl.dataset.sourceMarkdown ?? "";
+    if (!markdown) {
+      return 0;
+    }
+
+    // Get the element at the click position
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    if (!element || !this.notePreviewEl.contains(element)) {
+      return 0;
+    }
+
+    // Try to find text content and map it back to markdown
+    // Walk up to find a text-containing element
+    let targetElement: Node | null = element instanceof HTMLElement ? element : element.parentElement;
+    
+    // Find the deepest text node containing the click
+    if (targetElement && targetElement.nodeType === Node.ELEMENT_NODE) {
+      const range = document.caretRangeFromPoint?.(event.clientX, event.clientY);
+      if (range && range.startContainer) {
+        // Get all text content before the clicked position in the preview
+        const walker = document.createTreeWalker(
+          this.notePreviewEl,
+          NodeFilter.SHOW_TEXT,
+          null
+        );
+        
+        let charCount = 0;
+        let foundTarget = false;
+        let node: Node | null;
+        
+        while ((node = walker.nextNode())) {
+          if (node === range.startContainer) {
+            // Found the target text node, add offset within this node
+            charCount += range.startOffset;
+            foundTarget = true;
+            break;
+          }
+          // Add the length of this text node
+          charCount += node.textContent?.length || 0;
+        }
+        
+        if (foundTarget && charCount < markdown.length) {
+          // The preview text may differ from markdown due to formatting
+          // Use ratio-based estimation as fallback but try to be more accurate
+          const previewText = this.notePreviewEl.innerText;
+          if (previewText && charCount < previewText.length) {
+            // Map preview position to markdown position using ratio
+            const ratio = charCount / previewText.length;
+            const estimatedPos = Math.floor(ratio * markdown.length);
+            
+            // Snap to nearest word boundary or line
+            const beforeText = markdown.substring(0, estimatedPos);
+            const lastSpace = Math.max(
+              beforeText.lastIndexOf('\n'),
+              beforeText.lastIndexOf(' '),
+              beforeText.lastIndexOf('\t')
+            );
+            const nextSpace = markdown.indexOf(' ', estimatedPos);
+            const nextNewline = markdown.indexOf('\n', estimatedPos);
+            const nextBoundary = nextSpace === -1 ? nextNewline : 
+                                nextNewline === -1 ? nextSpace : 
+                                Math.min(nextSpace, nextNewline);
+            
+            if (lastSpace !== -1 || nextBoundary !== -1) {
+              const distToLast = lastSpace === -1 ? Infinity : estimatedPos - lastSpace - 1;
+              const distToNext = nextBoundary === -1 ? Infinity : nextBoundary - estimatedPos;
+              return distToLast <= distToNext ? lastSpace + 1 : nextBoundary;
+            }
+            return estimatedPos;
+          }
+          return charCount;
+        }
+      }
+    }
+
+    // Fallback: estimate position based on vertical offset
+    const rect = this.notePreviewEl.getBoundingClientRect();
+    const clickY = event.clientY - rect.top + this.notePreviewEl.scrollTop;
+    const totalHeight = this.notePreviewEl.scrollHeight;
+    
+    if (totalHeight === 0) {
+      return 0;
+    }
+
+    // Estimate position as a ratio of the click position to total height
+    const ratio = Math.min(1, Math.max(0, clickY / totalHeight));
+    const estimatedPosition = Math.floor(ratio * markdown.length);
+    
+    // Try to snap to nearest line boundary
+    const beforeText = markdown.substring(0, estimatedPosition);
+    const lastNewline = beforeText.lastIndexOf('\n');
+    const nextNewline = markdown.indexOf('\n', estimatedPosition);
+    
+    if (lastNewline === -1 && nextNewline === -1) {
+      return estimatedPosition;
+    }
+    
+    const distToLast = lastNewline === -1 ? Infinity : estimatedPosition - lastNewline;
+    const distToNext = nextNewline === -1 ? Infinity : nextNewline - estimatedPosition;
+    
+    return distToLast <= distToNext ? lastNewline + 1 : nextNewline + 1;
+  }
+
   private async renderMarkdown(markdown: string): Promise<void> {
     this.notePreviewEl.empty();
     this.notePreviewEl.dataset.sourceMarkdown = markdown;
@@ -3882,6 +4006,14 @@ export class MindmapView extends ItemView {
         ]
       })
     });
+    // Add double-click handler to toggle back to preview mode
+    this.noteEditorHostEl.addEventListener("dblclick", (event) => {
+      const target = event.target as HTMLElement;
+      // Only trigger if clicking on the editor content area, not on UI elements
+      if (target.closest(".cm-editor") || target.closest(".cm-content")) {
+        this.setNoteEditing(false);
+      }
+    });
   }
 
   private setNoteEditorValue(markdown: string): void {
@@ -3947,6 +4079,7 @@ export class MindmapView extends ItemView {
     const surfaceRect = this.noteSurfaceEl.getBoundingClientRect();
     let left = surfaceRect.width / 2;
     let top = 10;
+    let positionAbove = true;
 
     if (this.noteEditorView && !this.isMobileLayout) {
       const selection = this.noteEditorView.state.selection.main;
@@ -3963,8 +4096,21 @@ export class MindmapView extends ItemView {
 
     const toolbarWidth = this.noteSelectionToolbarEl.offsetWidth || 260;
     const toolbarHeight = this.noteSelectionToolbarEl.offsetHeight || 38;
+    
+    // Check if there's enough space above the selection
+    const spaceAbove = top;
+    const spaceBelow = surfaceRect.height - top;
+    
+    // If not enough space above (toolbar height + margin), position below
+    if (spaceAbove < toolbarHeight + 16) {
+      positionAbove = false;
+    }
+    
     const clampedLeft = Math.min(Math.max(left, toolbarWidth / 2 + 8), Math.max(toolbarWidth / 2 + 8, surfaceRect.width - toolbarWidth / 2 - 8));
-    const clampedTop = Math.max(8, top - toolbarHeight - 10);
+    const clampedTop = positionAbove 
+      ? Math.max(8, top - toolbarHeight - 10)
+      : Math.min(top + 24, surfaceRect.height - toolbarHeight - 8);
+    
     this.noteSelectionToolbarEl.style.left = `${clampedLeft}px`;
     this.noteSelectionToolbarEl.style.top = `${clampedTop}px`;
     this.noteSelectionToolbarEl.removeClass("is-hidden");
@@ -4803,19 +4949,27 @@ export class MindmapView extends ItemView {
     }
 
     const firstSection = sections[0];
-    const rootNote = [...preamble, ...firstSection.lines].join("\n").trim();
-    const rootTitle = firstSection.title || this.file?.basename || "导图";
+    
+    // Create an implicit root node to hold all top-level headings as siblings
+    // Use file basename if available, otherwise use first heading title or generic name
+    const rootTitle = this.file?.basename || (sections.length === 1 ? firstSection.title : "导图");
+    const rootNote = preamble.join("\n").trim();
     const root = this.createNodeFromMarkdownHeading(rootTitle, rootNote);
-    const stack: Array<{ level: number; node: MindmapNode }> = [{ level: firstSection.level, node: root }];
+    
+    // Process all sections (including the first one) as children of root
+    const stack: Array<{ level: number; node: MindmapNode }> = [{ level: 0, node: root }];
 
-    sections.slice(1).forEach((section) => {
+    sections.forEach((section) => {
       const node = this.createNodeFromMarkdownHeading(section.title, section.lines.join("\n"));
+      
+      // Pop from stack while current level is less than or equal to stack top level
+      // This ensures equal-level headings become siblings
       while (stack.length > 1 && stack[stack.length - 1].level >= section.level) {
         stack.pop();
       }
-      const parent = stack[stack.length - 1]?.level < section.level
-        ? stack[stack.length - 1].node
-        : root;
+      
+      // Add as child of current stack top
+      const parent = stack[stack.length - 1].node;
       parent.children.push(node);
       stack.push({ level: section.level, node });
     });
@@ -4866,10 +5020,24 @@ export class MindmapView extends ItemView {
       return false;
     }
     this.captureHistorySnapshot();
-    targetNode.children.push(markdownDoc.root);
+    
+    // If the markdown doc root has children, add them directly instead of the root itself
+    // This avoids creating an extra "center node" wrapper
+    if (markdownDoc.root.children.length > 0) {
+      markdownDoc.root.children.forEach((child) => {
+        targetNode.children.push(child);
+      });
+      // Select the first child node
+      this.selectedNodeId = markdownDoc.root.children[0].id;
+      this.selectedNodeIds = new Set([markdownDoc.root.children[0].id]);
+    } else {
+      // No children, just add the root itself
+      targetNode.children.push(markdownDoc.root);
+      this.selectedNodeId = markdownDoc.root.id;
+      this.selectedNodeIds = new Set([markdownDoc.root.id]);
+    }
+    
     targetNode.collapsed = false;
-    this.selectedNodeId = markdownDoc.root.id;
-    this.selectedNodeIds = new Set([markdownDoc.root.id]);
     this.editingNodeId = null;
     this.closeMobileNodeTooltip();
     this.noteHistoryCapturedForSession = false;
@@ -4994,35 +5162,39 @@ export class MindmapView extends ItemView {
     const imageItems = Array.from(event.clipboardData.items).filter((item) =>
       item.type.startsWith("image/")
     );
-    if (imageItems.length === 0) {
+    
+    // If there are images, handle them
+    if (imageItems.length > 0) {
+      event.preventDefault();
+
+      for (const item of imageItems) {
+        const file = item.getAsFile();
+        if (!file) {
+          continue;
+        }
+        const markdownLink = await this.savePastedImage(file);
+        if (!markdownLink) {
+          continue;
+        }
+        this.insertTextAtCursor(`\n${markdownLink}\n`);
+      }
+      const latestMarkdown = this.getCurrentNoteEditorValue();
+      this.handleNoteEditorInput(latestMarkdown);
+      window.setTimeout(() => {
+        if (this.getCurrentNoteEditorValue() === latestMarkdown) {
+          void this.renderMarkdown(latestMarkdown);
+        }
+      }, 180);
+      window.setTimeout(() => {
+        if (this.getCurrentNoteEditorValue() === latestMarkdown) {
+          void this.renderMarkdown(latestMarkdown);
+        }
+      }, 600);
       return;
     }
-
-    event.preventDefault();
-
-    for (const item of imageItems) {
-      const file = item.getAsFile();
-      if (!file) {
-        continue;
-      }
-      const markdownLink = await this.savePastedImage(file);
-      if (!markdownLink) {
-        continue;
-      }
-      this.insertTextAtCursor(`\n${markdownLink}\n`);
-    }
-    const latestMarkdown = this.getCurrentNoteEditorValue();
-    this.handleNoteEditorInput(latestMarkdown);
-    window.setTimeout(() => {
-      if (this.getCurrentNoteEditorValue() === latestMarkdown) {
-        void this.renderMarkdown(latestMarkdown);
-      }
-    }, 180);
-    window.setTimeout(() => {
-      if (this.getCurrentNoteEditorValue() === latestMarkdown) {
-        void this.renderMarkdown(latestMarkdown);
-      }
-    }, 600);
+    
+    // If no images, allow default paste behavior for text/markdown
+    // Don't prevent default - let the browser/CodeMirror handle text paste
   }
 
   private getCurrentNoteEditorValue(): string {
@@ -5171,7 +5343,7 @@ export class MindmapView extends ItemView {
     return `![[${targetPath}]]`;
   }
 
-  private setNoteEditing(editing: boolean): void {
+  private setNoteEditing(editing: boolean, cursorPosition?: number): void {
     if (editing === this.noteSurfaceEl.hasClass("is-editing")) {
       return;
     }
@@ -5185,10 +5357,22 @@ export class MindmapView extends ItemView {
       window.setTimeout(() => {
         if (this.noteEditorView && !this.isMobileLayout) {
           this.noteEditorView.focus();
+          // Set cursor position for CodeMirror editor
+          if (cursorPosition !== undefined) {
+            const pos = Math.min(cursorPosition, this.noteEditorView.state.doc.length);
+            this.noteEditorView.dispatch({
+              selection: { anchor: pos, head: pos }
+            });
+          }
           this.updateNoteSelectionToolbar();
           return;
         }
         this.noteInputEl.focus({ preventScroll: true });
+        // Set cursor position for textarea
+        if (cursorPosition !== undefined) {
+          const pos = Math.min(cursorPosition, this.noteInputEl.value.length);
+          this.noteInputEl.setSelectionRange(pos, pos);
+        }
         this.updateNoteSelectionToolbar();
       }, 0);
       return;

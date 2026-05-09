@@ -1399,7 +1399,7 @@
    display: none;
    border: 1px solid var(--background-modifier-border);
    border-radius: 8px;
-   padding: 10px 12px;
+   padding: 20px 16px;
    box-sizing: border-box;
    background: var(--background-primary);
    color: var(--text-normal);
@@ -1468,7 +1468,7 @@
  }
 
  .mindmap-note-editor-host .cm-content {
-   padding: 10px 12px;
+   padding: 20px 16px;
    caret-color: var(--text-normal);
    font-family: var(--font-monospace);
    tab-size: 2;
@@ -1490,7 +1490,7 @@
  .mindmap-note-preview {
    border: 1px solid var(--background-modifier-border);
    border-radius: 8px;
-   padding: 10px 12px;
+   padding: 20px 16px;
    box-sizing: border-box;
    overflow-y: auto;
    overflow-x: hidden;
