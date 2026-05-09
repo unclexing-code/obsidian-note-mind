@@ -153,6 +153,7 @@ export class MindmapView extends ItemView {
   private static readonly DEFAULT_DRAWER_WIDTH = 380;
   private static readonly MIN_DRAWER_WIDTH = 300;
   private static readonly MAX_DRAWER_WIDTH = 860;
+  private static readonly MAX_DRAWER_WIDTH_RATIO = 0.75;
   private static readonly MIN_ZOOM_SCALE = 0.1;
   private static readonly MAX_ZOOM_SCALE = 3;
   private static readonly MOBILE_NODE_TOOLTIP_REOPEN_DELAY = 420;
@@ -192,6 +193,7 @@ export class MindmapView extends ItemView {
   private nodeLinkClearButtonEl!: HTMLButtonElement;
   private noteSurfaceEl!: HTMLDivElement;
   private noteEditorHostEl!: HTMLDivElement;
+  private noteSelectionToolbarEl!: HTMLDivElement;
   private noteEditorView: EditorView | null = null;
   private isSyncingNoteEditor = false;
   private noteRenderTimer: number | null = null;
@@ -349,6 +351,15 @@ export class MindmapView extends ItemView {
   };
   private shouldIgnoreMindmapShortcuts(event: KeyboardEvent): boolean {
     const activeElement = document.activeElement;
+    const selection = window.getSelection();
+    if (
+      selection &&
+      !selection.isCollapsed &&
+      selection.rangeCount > 0 &&
+      this.notePreviewEl?.contains(selection.getRangeAt(0).commonAncestorContainer)
+    ) {
+      return true;
+    }
     if (activeElement instanceof HTMLElement) {
       if (activeElement.isContentEditable || activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
         return true;
@@ -2015,6 +2026,27 @@ export class MindmapView extends ItemView {
       this.noteToolbarEl.addClass("is-hidden");
     }
     this.noteSurfaceEl = this.drawerEl.createDiv({ cls: "mindmap-note-surface" });
+    this.noteSelectionToolbarEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-selection-toolbar is-hidden" });
+    [
+      { label: "B", title: "加粗", action: "bold" },
+      { label: "I", title: "斜体", action: "italic" },
+      { label: "`", title: "行内代码", action: "inline-code" },
+      { label: "代码块", title: "代码块", action: "code-block" },
+      { label: "链接", title: "链接", action: "link" }
+    ].forEach((buttonConfig) => {
+      const buttonEl = this.noteSelectionToolbarEl.createEl("button", { text: buttonConfig.label });
+      buttonEl.type = "button";
+      buttonEl.title = buttonConfig.title;
+      buttonEl.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      buttonEl.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.applyNoteSelectionFormat(buttonConfig.action);
+      });
+    });
     this.noteEditorHostEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-editor-host" });
     this.noteInputEl = this.noteSurfaceEl.createEl("textarea", {
       cls: "mindmap-note-input"
@@ -2027,15 +2059,23 @@ export class MindmapView extends ItemView {
       this.noteEditorHostEl.addClass("is-hidden");
     }
     this.notePreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-preview markdown-preview-view" });
+    this.notePreviewEl.addEventListener("copy", (event) => this.handleNotePreviewCopy(event));
     this.noteTocEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-toc is-empty is-collapsed" });
     this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
 
     this.noteInputEl.addEventListener("focus", () => {
       this.updateMobileActionClusterVisibility();
+      this.updateNoteSelectionToolbar();
     });
     this.noteInputEl.addEventListener("blur", () => {
-      window.setTimeout(() => this.updateMobileActionClusterVisibility(), 0);
+      window.setTimeout(() => {
+        this.updateMobileActionClusterVisibility();
+        this.updateNoteSelectionToolbar();
+      }, 0);
     });
+    this.noteInputEl.addEventListener("select", () => this.updateNoteSelectionToolbar());
+    this.noteInputEl.addEventListener("keyup", () => this.updateNoteSelectionToolbar());
+    this.noteInputEl.addEventListener("pointerup", () => this.updateNoteSelectionToolbar());
     this.noteInputEl.addEventListener("input", () => {
       if (!this.isMobileLayout) {
         return;
@@ -3632,6 +3672,7 @@ export class MindmapView extends ItemView {
 
   private async renderMarkdown(markdown: string): Promise<void> {
     this.notePreviewEl.empty();
+    this.notePreviewEl.dataset.sourceMarkdown = markdown;
     this.renderNoteToc(markdown);
     const trimmed = markdown.trim();
     if (!trimmed) {
@@ -3711,11 +3752,89 @@ export class MindmapView extends ItemView {
     }, 60);
   }
 
+  private getNotePreviewPlainTextFromSelection(selection: Selection): string {
+    const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+    if (!range || !this.notePreviewEl.contains(range.commonAncestorContainer)) {
+      return this.notePreviewEl.innerText.trim();
+    }
+    const fragment = range.cloneContents();
+    const container = document.createElement("div");
+    container.appendChild(fragment);
+    return (container.innerText || selection.toString()).trim();
+  }
+
+  private handleNotePreviewCopy(event: ClipboardEvent): void {
+    if (this.noteSurfaceEl.hasClass("is-editing") || !event.clipboardData) {
+      return;
+    }
+    const selection = window.getSelection();
+    const selectedText = selection && !selection.isCollapsed
+      ? this.getNotePreviewPlainTextFromSelection(selection)
+      : "";
+    const fallbackText = (this.notePreviewEl.dataset.sourceMarkdown ?? "").trim();
+    const textToCopy = selectedText || fallbackText || this.notePreviewEl.innerText.trim();
+    if (!textToCopy) {
+      return;
+    }
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", textToCopy);
+  }
+
+  private getNoteEditorScrollRatio(): number {
+    if (this.noteEditorView && !this.isMobileLayout) {
+      const scroller = this.noteEditorView.scrollDOM;
+      const scrollable = scroller.scrollHeight - scroller.clientHeight;
+      return scrollable > 0 ? scroller.scrollTop / scrollable : 0;
+    }
+    const scrollable = this.noteInputEl.scrollHeight - this.noteInputEl.clientHeight;
+    return scrollable > 0 ? this.noteInputEl.scrollTop / scrollable : 0;
+  }
+
+  private setNoteEditorScrollRatio(ratio: number): void {
+    const clampedRatio = Math.min(1, Math.max(0, ratio));
+    if (this.noteEditorView && !this.isMobileLayout) {
+      const scroller = this.noteEditorView.scrollDOM;
+      scroller.scrollTop = (scroller.scrollHeight - scroller.clientHeight) * clampedRatio;
+      return;
+    }
+    this.noteInputEl.scrollTop = (this.noteInputEl.scrollHeight - this.noteInputEl.clientHeight) * clampedRatio;
+  }
+
+  private getNotePreviewScrollRatio(): number {
+    const scrollable = this.notePreviewEl.scrollHeight - this.notePreviewEl.clientHeight;
+    return scrollable > 0 ? this.notePreviewEl.scrollTop / scrollable : 0;
+  }
+
+  private setNotePreviewScrollRatio(ratio: number): void {
+    const clampedRatio = Math.min(1, Math.max(0, ratio));
+    this.notePreviewEl.scrollTop = (this.notePreviewEl.scrollHeight - this.notePreviewEl.clientHeight) * clampedRatio;
+  }
+
+  private syncNoteScrollAfterLayout(target: "editor" | "preview", ratio: number): void {
+    window.requestAnimationFrame(() => {
+      if (target === "editor") {
+        this.setNoteEditorScrollRatio(ratio);
+      } else {
+        this.setNotePreviewScrollRatio(ratio);
+      }
+      window.requestAnimationFrame(() => {
+        if (target === "editor") {
+          this.setNoteEditorScrollRatio(ratio);
+        } else {
+          this.setNotePreviewScrollRatio(ratio);
+        }
+      });
+    });
+  }
+
   private createNoteEditor(): void {
     if (this.noteEditorView || !this.noteEditorHostEl) {
       return;
     }
     const updateListener = EditorView.updateListener.of((update) => {
+      if (update.selectionSet || update.focusChanged || update.docChanged) {
+        window.requestAnimationFrame(() => this.updateNoteSelectionToolbar());
+      }
       if (!update.docChanged || this.isSyncingNoteEditor) {
         return;
       }
@@ -3805,6 +3924,112 @@ export class MindmapView extends ItemView {
     this.requestSave();
   }
 
+  private hideNoteSelectionToolbar(): void {
+    this.noteSelectionToolbarEl?.addClass("is-hidden");
+  }
+
+  private hasActiveNoteSelection(): boolean {
+    if (!this.noteSurfaceEl?.hasClass("is-editing")) {
+      return false;
+    }
+    if (this.noteEditorView && !this.isMobileLayout) {
+      const selection = this.noteEditorView.state.selection.main;
+      return !selection.empty && this.noteEditorView.hasFocus;
+    }
+    return document.activeElement === this.noteInputEl && this.noteInputEl.selectionStart !== this.noteInputEl.selectionEnd;
+  }
+
+  private updateNoteSelectionToolbar(): void {
+    if (!this.noteSelectionToolbarEl || !this.hasActiveNoteSelection()) {
+      this.hideNoteSelectionToolbar();
+      return;
+    }
+    const surfaceRect = this.noteSurfaceEl.getBoundingClientRect();
+    let left = surfaceRect.width / 2;
+    let top = 10;
+
+    if (this.noteEditorView && !this.isMobileLayout) {
+      const selection = this.noteEditorView.state.selection.main;
+      const coords = this.noteEditorView.coordsAtPos(selection.from);
+      if (coords) {
+        left = coords.left - surfaceRect.left;
+        top = coords.top - surfaceRect.top;
+      }
+    } else {
+      const inputRect = this.noteInputEl.getBoundingClientRect();
+      left = inputRect.left - surfaceRect.left + inputRect.width / 2;
+      top = inputRect.top - surfaceRect.top + 12;
+    }
+
+    const toolbarWidth = this.noteSelectionToolbarEl.offsetWidth || 260;
+    const toolbarHeight = this.noteSelectionToolbarEl.offsetHeight || 38;
+    const clampedLeft = Math.min(Math.max(left, toolbarWidth / 2 + 8), Math.max(toolbarWidth / 2 + 8, surfaceRect.width - toolbarWidth / 2 - 8));
+    const clampedTop = Math.max(8, top - toolbarHeight - 10);
+    this.noteSelectionToolbarEl.style.left = `${clampedLeft}px`;
+    this.noteSelectionToolbarEl.style.top = `${clampedTop}px`;
+    this.noteSelectionToolbarEl.removeClass("is-hidden");
+  }
+
+  private wrapSelectionText(selectedText: string, action: string): { text: string; cursorOffset: number; selectLength: number } {
+    if (action === "bold") {
+      return { text: `**${selectedText || "加粗文字"}**`, cursorOffset: 2, selectLength: selectedText.length || 4 };
+    }
+    if (action === "italic") {
+      return { text: `*${selectedText || "斜体文字"}*`, cursorOffset: 1, selectLength: selectedText.length || 4 };
+    }
+    if (action === "inline-code") {
+      return { text: `\`${selectedText || "code"}\``, cursorOffset: 1, selectLength: selectedText.length || 4 };
+    }
+    if (action === "code-block") {
+      const code = selectedText || "code";
+      return { text: `\n\`\`\`\n${code}\n\`\`\`\n`, cursorOffset: 5, selectLength: code.length };
+    }
+    if (action === "link") {
+      const label = selectedText || "链接文字";
+      return { text: `[${label}](url)`, cursorOffset: 1, selectLength: label.length };
+    }
+    return { text: selectedText, cursorOffset: 0, selectLength: selectedText.length };
+  }
+
+  private applyNoteSelectionFormat(action: string): void {
+    if (!this.noteSurfaceEl.hasClass("is-editing")) {
+      return;
+    }
+    if (this.noteEditorView && !this.isMobileLayout) {
+      const view = this.noteEditorView;
+      const selection = view.state.selection.main;
+      if (selection.empty) {
+        this.hideNoteSelectionToolbar();
+        return;
+      }
+      const selectedText = view.state.doc.sliceString(selection.from, selection.to);
+      const wrapped = this.wrapSelectionText(selectedText, action);
+      const selectionFrom = selection.from + wrapped.cursorOffset;
+      view.dispatch({
+        changes: { from: selection.from, to: selection.to, insert: wrapped.text },
+        selection: { anchor: selectionFrom, head: selectionFrom + wrapped.selectLength },
+        scrollIntoView: true
+      });
+      view.focus();
+      window.requestAnimationFrame(() => this.updateNoteSelectionToolbar());
+      return;
+    }
+    const input = this.noteInputEl;
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? 0;
+    if (start === end) {
+      this.hideNoteSelectionToolbar();
+      return;
+    }
+    const selectedText = input.value.slice(start, end);
+    const wrapped = this.wrapSelectionText(selectedText, action);
+    input.setRangeText(wrapped.text, start, end, "preserve");
+    input.setSelectionRange(start + wrapped.cursorOffset, start + wrapped.cursorOffset + wrapped.selectLength);
+    input.dispatchEvent(new Event("input"));
+    input.focus({ preventScroll: true });
+    window.requestAnimationFrame(() => this.updateNoteSelectionToolbar());
+  }
+
   private prepareMarkdownForPreview(markdown: string): string {
     return markdown.replace(/!\[\[([^\]]+)\]\]/g, (full, rawTarget: string) => {
       const target = rawTarget.split("|")[0]?.trim();
@@ -3833,6 +4058,10 @@ export class MindmapView extends ItemView {
   }
 
   private updateDrawerWidth(): void {
+    const viewportWidth = this.layoutEl?.clientWidth || window.innerWidth;
+    const maxDrawerWidth = Math.floor(viewportWidth * MindmapView.MAX_DRAWER_WIDTH_RATIO);
+    const boundedMaxDrawerWidth = Math.max(MindmapView.MIN_DRAWER_WIDTH, Math.min(MindmapView.MAX_DRAWER_WIDTH, maxDrawerWidth));
+    this.drawerWidth = Math.min(Math.max(this.drawerWidth, MindmapView.MIN_DRAWER_WIDTH), boundedMaxDrawerWidth);
     this.layoutEl?.style.setProperty("--mindmap-drawer-width", `${this.drawerWidth}px`);
   }
 
@@ -3851,8 +4080,13 @@ export class MindmapView extends ItemView {
 
     const onMove = (moveEvent: PointerEvent): void => {
       const delta = startX - moveEvent.clientX;
+      const viewportWidth = this.layoutEl?.clientWidth || window.innerWidth;
+      const maxDrawerWidth = Math.max(
+        MindmapView.MIN_DRAWER_WIDTH,
+        Math.min(MindmapView.MAX_DRAWER_WIDTH, Math.floor(viewportWidth * MindmapView.MAX_DRAWER_WIDTH_RATIO))
+      );
       this.drawerWidth = Math.min(
-        MindmapView.MAX_DRAWER_WIDTH,
+        maxDrawerWidth,
         Math.max(MindmapView.MIN_DRAWER_WIDTH, startWidth + delta)
       );
       this.updateDrawerWidth();
@@ -4941,24 +5175,30 @@ export class MindmapView extends ItemView {
     if (editing === this.noteSurfaceEl.hasClass("is-editing")) {
       return;
     }
+    const scrollRatio = editing ? this.getNotePreviewScrollRatio() : this.getNoteEditorScrollRatio();
     this.noteSurfaceEl.toggleClass("is-editing", editing);
     this.noteModeToggleEl.setText(editing ? "预览" : "编辑");
     this.updateMobileActionClusterVisibility();
     if (editing) {
       this.notePreviewEl.addClass("is-live-hidden");
+      this.syncNoteScrollAfterLayout("editor", scrollRatio);
       window.setTimeout(() => {
         if (this.noteEditorView && !this.isMobileLayout) {
           this.noteEditorView.focus();
+          this.updateNoteSelectionToolbar();
           return;
         }
         this.noteInputEl.focus({ preventScroll: true });
+        this.updateNoteSelectionToolbar();
       }, 0);
       return;
     }
+    this.hideNoteSelectionToolbar();
     this.noteEditorView?.contentDOM.blur();
     this.noteInputEl.blur();
     this.notePreviewEl.removeClass("is-live-hidden");
     this.focusContainerWithoutScroll();
+    this.syncNoteScrollAfterLayout("preview", scrollRatio);
   }
 
   private closeDrawer(): void {
@@ -5165,7 +5405,7 @@ export class MindmapView extends ItemView {
     const autoHeight = this.measureAutoHeight(node.title, autoWidth);
 
     const width = node.manualSize && typeof node.width === "number"
-      ? Math.max(MindmapView.MIN_NODE_WIDTH, Math.min(MindmapView.MAX_NODE_WIDTH, node.width))
+      ? Math.max(MindmapView.MIN_NODE_WIDTH, node.width)
       : autoWidth;
     const height = node.manualSize && typeof node.height === "number"
       ? Math.max(MindmapView.MIN_NODE_HEIGHT, node.height)
