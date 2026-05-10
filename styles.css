@@ -1749,7 +1749,7 @@
 
 /* Highlight animation for jumping to comment */
 .mindmap-comment-card-highlight {
-  animation: mindmap-comment-pulse 1.5s ease-in-out;
+  animation: mindmap-comment-pulse 0.3s ease-in-out;
   border-color: var(--interactive-accent) !important;
   box-shadow: 0 0 0 3px rgba(var(--interactive-accent-rgb), 0.4) !important;
 }
@@ -1757,15 +1757,12 @@
 @keyframes mindmap-comment-pulse {
   0%, 100% {
     background: #FFF8E7;
-    transform: scale(1);
   }
   25% {
     background: color-mix(in srgb, var(--interactive-accent) 25%, #FFF8E7);
-    transform: scale(1.02);
   }
   50% {
     background: color-mix(in srgb, var(--interactive-accent) 35%, #FFF8E7);
-    transform: scale(1.03);
   }
   75% {
     background: color-mix(in srgb, var(--interactive-accent) 25%, #FFF8E7);
@@ -1994,8 +1991,8 @@
 
 /* Comment text highlight in preview mode */
 .mindmap-comment-highlight {
-  background: linear-gradient(120deg, rgba(66, 133, 244, 0.3) 0%, rgba(66, 133, 244, 0.15) 100%);
-  border-bottom: 2px solid #4285f4;
+  background: lightyellow;
+  border-bottom: 2px solid lightyellow;
   padding: 1px 3px;
   border-radius: 3px;
   transition: all 0.2s ease;
@@ -2048,19 +2045,19 @@
 /* Footnote Marker Styles */
 .mindmap-footnote-marker {
   display: inline-block;
-  padding: 2px 6px;
-  margin: 0 2px;
-  background: linear-gradient(135deg, #FFEAA7 0%, #FDCB6E 100%);
-  border-radius: 4px;
+  /* padding: 2px 6px; */
+  /* margin: 0 2px; */
+  /* background: linear-gradient(135deg, #FFEAA7 0%, #FDCB6E 100%); */
+  /* border-radius: 4px; */
   line-height: 1.2;
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 1px 3px rgba(243, 156, 18, 0.2);
+  /* box-shadow: 0 1px 3px rgba(243, 156, 18, 0.2); */
   user-select: none;
 }
 
 .mindmap-footnote-marker:hover {
-  background: linear-gradient(135deg, #FFD93D 0%, #F39C12 100%);
+  /* background: linear-gradient(135deg, #FFD93D 0%, #F39C12 100%); */
   transform: translateY(-1px);
   box-shadow: 0 2px 6px rgba(243, 156, 18, 0.3);
 }
@@ -2070,7 +2067,7 @@
 }
 
 .mindmap-footnote-marker-flash {
-  animation: mindmap-footnote-flash 1.5s ease-in-out;
+  animation: mindmap-footnote-flash 0.3s ease-in-out;
 }
 
 @keyframes mindmap-footnote-flash {
@@ -2090,7 +2087,7 @@
 
 /* Textarea Flash Animation */
 .mindmap-textarea-flash {
-  animation: mindmap-textarea-flash 1.5s ease-in-out;
+  animation: mindmap-textarea-flash 0.3s ease-in-out;
 }
 
 @keyframes mindmap-textarea-flash {
@@ -2170,26 +2167,6 @@
   padding: 8px 16px;
 }
 
-  0%, 100% {
-    background: linear-gradient(135deg, #FFEAA7 0%, #FDCB6E 100%);
-    box-shadow: 0 1px 3px rgba(243, 156, 18, 0.2);
-  }
-  25% {
-    background: linear-gradient(135deg, #FFD93D 0%, #F39C12 100%);
-    box-shadow: 0 0 15px rgba(243, 156, 18, 0.6);
-    transform: scale(1.1);
-  }
-  50% {
-    background: linear-gradient(135deg, #FFA502 0%, #E67E22 100%);
-    box-shadow: 0 0 20px rgba(243, 156, 18, 0.8);
-    transform: scale(1.15);
-  }
-  75% {
-    background: linear-gradient(135deg, #FFD93D 0%, #F39C12 100%);
-    box-shadow: 0 0 15px rgba(243, 156, 18, 0.6);
-    transform: scale(1.1);
-  }
-}
 
 /* Footnote Badge in Comment Card */
 .mindmap-footnote-badge {
@@ -2223,7 +2200,7 @@
 
 /* Flash effect for textarea */
 .mindmap-footnote-flash {
-  animation: mindmap-textarea-flash 1.5s ease-in-out;
+  animation: mindmap-textarea-flash 0.3s ease-in-out;
 }
 
 @keyframes mindmap-textarea-flash {
@@ -2235,6 +2212,20 @@
   }
   50% {
     box-shadow: 0 0 0 5px rgba(9, 132, 227, 0.6);
+  }
+}
+
+/* Flash animation for highlighted text when jumping from comment card */
+.mindmap-comment-text-flash {
+  animation: mindmap-text-flash 0.3s ease-in-out;
+}
+
+@keyframes mindmap-text-flash {
+  0%, 100% {
+    border-color: #4285f4;
+  }
+  50% {
+    border-color: transparent;
   }
 }
 

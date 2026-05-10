@@ -4860,6 +4860,24 @@ export class MindmapView extends ItemView {
       this.hideNoteSelectionToolbar();
       return;
     }
+    
+    // Check if in preview mode - only show comment button
+    const isPreviewMode = !this.noteSurfaceEl?.hasClass("is-editing");
+    
+    // Show/hide buttons based on mode
+    const buttons = this.noteSelectionToolbarEl.querySelectorAll("button");
+    buttons.forEach((button, index) => {
+      const buttonEl = button as HTMLElement;
+      // Last button (index 5) is the comment button
+      if (isPreviewMode) {
+        // In preview mode, only show comment button
+        buttonEl.style.display = index === 5 ? "" : "none";
+      } else {
+        // In edit mode, show all buttons
+        buttonEl.style.display = "";
+      }
+    });
+    
     const surfaceRect = this.noteSurfaceEl.getBoundingClientRect();
     let left = surfaceRect.width / 2;
     let top = 10;
@@ -5217,7 +5235,7 @@ export class MindmapView extends ItemView {
       return;
     }
     
-    // Find the comment to get its footnote ID
+    // Find the comment to get its footnote ID and selected text
     const comment = node.comments?.find(c => c.id === commentId);
     
     if (node.comments) {
@@ -5225,8 +5243,12 @@ export class MindmapView extends ItemView {
       node.comments = node.comments.filter(c => c.id !== commentId);
       
       // If using footnote mode, also remove the footnote marker from the source
-      if (comment && comment.footnoteId) {
-        const footnotePattern = `[^${comment.footnoteId}::`;
+      if (comment && comment.footnoteId && comment.text) {
+        // Correct pattern to match the entire footnote marker: [^c1::selected text]
+        const footnoteMarker = `[^${comment.footnoteId}::${comment.text}]`;
+        
+        console.log('[DEBUG] Deleting footnote marker:', footnoteMarker);
+        console.log('[DEBUG] Restoring text:', comment.text);
         
         if (this.noteSurfaceEl?.hasClass("is-editing")) {
           // In edit mode, remove from editor content
@@ -5234,52 +5256,49 @@ export class MindmapView extends ItemView {
             // CodeMirror editor
             const doc = this.noteEditorView.state.doc;
             const text = doc.toString();
-            const startPos = text.indexOf(footnotePattern);
+            const startPos = text.indexOf(footnoteMarker);
             
             if (startPos !== -1) {
-              const endPos = text.indexOf(']', startPos);
-              if (endPos !== -1) {
-                // Remove the footnote marker including the closing bracket
-                this.noteEditorView.dispatch({
-                  changes: { from: startPos, to: endPos + 1, insert: '' }
-                });
-                
-                // Update node.note after deletion
-                node.note = this.noteEditorView.state.doc.toString();
-              }
+              // Replace footnote marker with just the original text
+              this.noteEditorView.dispatch({
+                changes: { from: startPos, to: startPos + footnoteMarker.length, insert: comment.text }
+              });
+              
+              // Update node.note after deletion
+              node.note = this.noteEditorView.state.doc.toString();
+            } else {
+              console.log('[DEBUG] Footnote marker not found in CodeMirror editor');
             }
           } else {
             // Textarea editor
             const input = this.noteInputEl;
             const text = input.value;
-            const startPos = text.indexOf(footnotePattern);
+            const startPos = text.indexOf(footnoteMarker);
             
             if (startPos !== -1) {
-              const endPos = text.indexOf(']', startPos);
-              if (endPos !== -1) {
-                // Remove the footnote marker
-                const before = text.substring(0, startPos);
-                const after = text.substring(endPos + 1);
-                input.value = before + after;
-                input.dispatchEvent(new Event("input"));
-                
-                // Update node.note
-                node.note = input.value;
-              }
+              // Replace footnote marker with just the original text
+              const before = text.substring(0, startPos);
+              const after = text.substring(startPos + footnoteMarker.length);
+              input.value = before + comment.text + after;
+              input.dispatchEvent(new Event("input"));
+              
+              // Update node.note
+              node.note = input.value;
+            } else {
+              console.log('[DEBUG] Footnote marker not found in textarea');
             }
           }
         } else {
           // In preview mode, remove from node.note directly
           const text = node.note || "";
-          const startPos = text.indexOf(footnotePattern);
+          const startPos = text.indexOf(footnoteMarker);
           
           if (startPos !== -1) {
-            const endPos = text.indexOf(']', startPos);
-            if (endPos !== -1) {
-              const before = text.substring(0, startPos);
-              const after = text.substring(endPos + 1);
-              node.note = before + after;
-            }
+            const before = text.substring(0, startPos);
+            const after = text.substring(startPos + footnoteMarker.length);
+            node.note = before + comment.text + after;
+          } else {
+            console.log('[DEBUG] Footnote marker not found in node.note');
           }
         }
       }
