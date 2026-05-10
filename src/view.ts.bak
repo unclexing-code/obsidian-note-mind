@@ -217,61 +217,6 @@ class CommentModal extends Modal {
   }
 }
 
-// Modal for selecting which occurrence of text to comment on
-class TextSelectionModal extends Modal {
-  constructor(
-    app: App,
-    private readonly selectedText: string,
-    private readonly occurrences: number[],
-    private readonly nodeNote: string,
-    private readonly onSelect: (selectedIndex: number) => void
-  ) {
-    super(app);
-  }
-
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("mindmap-text-selection-modal");
-    
-    contentEl.createEl("h2", { text: `找到 ${this.occurrences.length} 处匹配的文本` });
-    
-    const descriptionEl = contentEl.createDiv({ cls: "mindmap-text-selection-description" });
-    descriptionEl.setText("请选择要评论的位置：");
-    
-    // Create selection list
-    const listEl = contentEl.createDiv({ cls: "mindmap-text-selection-list" });
-    
-    this.occurrences.forEach((pos, idx) => {
-      const before = this.nodeNote.substring(Math.max(0, pos - 30), pos);
-      const after = this.nodeNote.substring(pos + this.selectedText.length, Math.min(this.nodeNote.length, pos + this.selectedText.length + 30));
-      
-      const itemEl = listEl.createDiv({ cls: "mindmap-text-selection-item" });
-      itemEl.dataset.index = idx.toString();
-      
-      const previewEl = itemEl.createDiv({ cls: "mindmap-text-selection-preview" });
-      previewEl.innerHTML = `...${before}<strong>[${this.selectedText}]</strong>${after}...`;
-      
-      itemEl.addEventListener("click", () => {
-        this.onSelect(idx);
-        this.close();
-      });
-    });
-    
-    // Cancel button
-    const buttonContainer = contentEl.createDiv({ cls: "mindmap-text-selection-actions" });
-    const cancelBtn = buttonContainer.createEl("button", { text: "取消" });
-    cancelBtn.type = "button";
-    cancelBtn.addEventListener("click", () => {
-      this.close();
-    });
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-  }
-}
-
 export class MindmapView extends ItemView {
   private static readonly MINDMAP_CLIPBOARD_STORAGE_KEY = "obsidian-note-mind:clipboard";
   private static readonly MINDMAP_CLIPBOARD_TEXT_PREFIX = "obsidian-note-mind:node-clipboard:";
@@ -281,7 +226,9 @@ export class MindmapView extends ItemView {
   private static readonly MAX_NODE_WIDTH = 320;
   private static readonly MIN_NODE_HEIGHT = 44;
   private static readonly DEFAULT_DRAWER_WIDTH = 380;
-  private static readonly MIN_DRAWER_WIDTH = 200;
+  private static readonly MIN_DRAWER_WIDTH = 300;
+  private static readonly MAX_DRAWER_WIDTH = 860;
+  private static readonly MAX_DRAWER_WIDTH_RATIO = 0.75;
   private static readonly MIN_ZOOM_SCALE = 0.1;
   private static readonly MAX_ZOOM_SCALE = 3;
   private static readonly MOBILE_NODE_TOOLTIP_REOPEN_DELAY = 420;
@@ -3197,11 +3144,14 @@ export class MindmapView extends ItemView {
     let bestDistance = Number.POSITIVE_INFINITY;
 
     candidates.forEach((candidate) => {
+      if (subtreeIds.has(candidate.id)) {
+        return;
+      }
       const size = this.ensureNodeSize(candidate);
       const anchorX = candidate.x + size.width / 2;
       const anchorY = candidate.y;
-      const deltaX = anchorNode.x - anchorX;
-      const deltaY = anchorNode.y - anchorY;
+      const deltaX = movingNode.x - anchorX;
+      const deltaY = movingNode.y - anchorY;
       const distance = Math.hypot(deltaX, deltaY);
       const edgeThreshold = Math.max(42, size.height * 0.9);
       if (distance > edgeThreshold || distance >= bestDistance) {
@@ -3930,20 +3880,7 @@ export class MindmapView extends ItemView {
       return;
     }
     const prepared = this.prepareMarkdownForPreview(markdown);
-    console.log('[DEBUG] prepareMarkdownForPreview output length:', prepared.length);
-    
-    // Check if footnote markers are present in prepared markdown
-    const footnoteMarkers = prepared.match(/\[?\^([a-zA-Z0-9]+)::([^\]]+)\]?/g);
-    console.log('[DEBUG] Footnote markers found in prepared markdown:', footnoteMarkers);
-    
     await MarkdownRenderer.renderMarkdown(prepared, this.notePreviewEl, this.file?.path ?? "", this);
-    
-    // Check if footnote marker spans are present after rendering
-    const renderedFootnoteSpans = this.notePreviewEl.querySelectorAll('span.mindmap-footnote-marker');
-    console.log('[DEBUG] Footnote marker spans after rendering:', renderedFootnoteSpans.length);
-    renderedFootnoteSpans.forEach((span, index) => {
-      console.log(`[DEBUG] Footnote span ${index}:`, span.outerHTML.substring(0, 100));
-    });
     this.markRenderedNoteHeadings();
     this.notePreviewEl.querySelectorAll("img").forEach((image) => {
       if (!(image instanceof HTMLImageElement)) {
@@ -3998,18 +3935,6 @@ export class MindmapView extends ItemView {
         console.log('[DEBUG] Calling updateNoteSelectionToolbar after timeout');
         this.updateNoteSelectionToolbar();
       }, 10);
-    });
-    
-    // Add click handler for footnote markers
-    this.notePreviewEl.querySelectorAll("span.mindmap-footnote-marker").forEach((marker) => {
-      marker.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const footnoteId = (marker as HTMLElement).dataset.footnoteId;
-        if (footnoteId) {
-          console.log('[DEBUG] Footnote marker clicked:', footnoteId);
-          this.jumpToCommentByFootnoteId(footnoteId);
-        }
-      });
     });
     
     // Highlight commented text in preview mode (delayed to ensure DOM is ready)
@@ -4398,6 +4323,52 @@ export class MindmapView extends ItemView {
   
   private jumpToComment(commentId: string): void {
     console.log('[DEBUG] Jumping to comment:', commentId);
+      const content = targetNode.textContent || '';
+      
+      if (offsetInNode + searchText.length <= content.length) {
+        console.log('[DEBUG] Case-insensitive match fits in single node');
+        
+        // Use original casing from the node content
+        const actualText = content.substring(offsetInNode, offsetInNode + searchText.length);
+        const beforeText = content.substring(0, offsetInNode);
+        const afterText = content.substring(offsetInNode + searchText.length);
+        
+        const fragment = document.createDocumentFragment();
+        if (beforeText) {
+          fragment.appendChild(document.createTextNode(beforeText));
+        }
+        
+        const highlightSpan = document.createElement('span');
+        highlightSpan.className = 'mindmap-comment-highlight';
+        highlightSpan.dataset.commentId = commentId;
+        highlightSpan.textContent = actualText;
+        highlightSpan.title = '点击查看评论';
+        highlightSpan.style.cursor = 'pointer';
+        
+        highlightSpan.addEventListener('click', (e) => {
+          e.stopPropagation();
+          console.log('[DEBUG] Highlight clicked, jumping to comment:', commentId);
+          this.jumpToComment(commentId);
+        });
+        
+        fragment.appendChild(highlightSpan);
+        
+        if (afterText) {
+          fragment.appendChild(document.createTextNode(afterText));
+        }
+        
+        targetNode.parentNode?.replaceChild(fragment, targetNode);
+        console.log('[DEBUG] Successfully highlighted text (case-insensitive)');
+        return true;
+      }
+    }
+    
+    console.log('[DEBUG] No match found for:', searchText.substring(0, 30));
+    return false;
+  }
+  
+  private jumpToComment(commentId: string): void {
+    console.log('[DEBUG] Jumping to comment:', commentId);
     
     // Show comments panel if not already shown
     this.showCommentsPanel();
@@ -4413,29 +4384,6 @@ export class MindmapView extends ItemView {
         }, 2000);
       }
     }, 100);
-  }
-  
-  private jumpToCommentByFootnoteId(footnoteId: string): void {
-    console.log('[DEBUG] Jumping to comment by footnote ID:', footnoteId);
-    
-    // Find the comment with matching footnoteId
-    if (!this.doc || !this.selectedNodeId) {
-      return;
-    }
-    
-    const node = findNodeById(this.doc, this.selectedNodeId);
-    if (!node || !node.comments) {
-      return;
-    }
-    
-    const comment = node.comments.find(c => c.footnoteId === footnoteId);
-    if (!comment) {
-      console.log('[DEBUG] Comment not found for footnote ID:', footnoteId);
-      return;
-    }
-    
-    // Jump to the comment card
-    this.jumpToComment(comment.id);
   }
   
   private scrollToHighlightedText(commentId: string): void {
@@ -4460,186 +4408,6 @@ export class MindmapView extends ItemView {
     }, 1500);
     
     console.log('[DEBUG] Successfully scrolled to highlighted text');
-  }
-  
-  private scrollToFootnoteMarker(footnoteId: string): void {
-    console.log('[DEBUG] Scrolling to footnote marker:', footnoteId);
-    
-    // Check if in edit mode
-    if (this.noteSurfaceEl?.hasClass("is-editing")) {
-      // In edit mode, find the footnote marker in the editor
-      const footnotePattern = `[^${footnoteId}::`;
-      
-      if (this.noteEditorView && !this.isMobileLayout) {
-        // CodeMirror editor
-        const doc = this.noteEditorView.state.doc;
-        const text = doc.toString();
-        const position = text.indexOf(footnotePattern);
-        
-        if (position !== -1) {
-          console.log('[DEBUG] Found footnote at position:', position);
-          
-          // Scroll to the position
-          this.noteEditorView.dispatch({
-            effects: [
-              this.noteEditorView.scrollDOM.scrollTo({ 
-                top: this.getPositionScrollTop(position),
-                behavior: 'smooth'
-              })
-            ]
-          });
-          
-          // Select the footnote marker
-          const endPosition = text.indexOf(']', position);
-          if (endPosition !== -1) {
-            this.noteEditorView.dispatch({
-              selection: { anchor: position, head: endPosition + 1 }
-            });
-          }
-          
-          // Add flash effect by temporarily highlighting
-          this.flashEditorPosition(position, endPosition > position ? endPosition - position : 20);
-        } else {
-          console.log('[DEBUG] Footnote marker not found in editor');
-          new Notice("未找到脚注标记");
-        }
-      } else {
-        // Textarea editor
-        const input = this.noteInputEl;
-        const text = input.value;
-        const position = text.indexOf(footnotePattern);
-        
-        if (position !== -1) {
-          console.log('[DEBUG] Found footnote at position:', position);
-          
-          // Calculate line number for scrolling
-          const lines = text.substring(0, position).split('\n');
-          const lineNumber = lines.length - 1;
-          
-          // Scroll to approximate position
-          const lineHeight = 20; // Approximate line height
-          input.scrollTop = lineNumber * lineHeight;
-          
-          // Select the footnote marker
-          const endPosition = text.indexOf(']', position);
-          if (endPosition !== -1) {
-            input.setSelectionRange(position, endPosition + 1);
-            input.focus();
-          }
-          
-          // Flash effect
-          input.addClass('mindmap-footnote-flash');
-          setTimeout(() => {
-            input.removeClass('mindmap-footnote-flash');
-          }, 1500);
-        } else {
-          console.log('[DEBUG] Footnote marker not found in textarea');
-          new Notice("未找到脚注标记");
-        }
-      }
-    } else {
-      // In preview mode, find the footnote marker span
-      console.log('[DEBUG] Looking for footnote marker in preview mode');
-      console.log('[DEBUG] notePreviewEl exists:', !!this.notePreviewEl);
-      
-      // First, try to find the marker directly
-      // Note: Obsidian's MarkdownRenderer may append a suffix to the footnote ID (e.g., "c4" becomes "c4-96ce84c39842d649")
-      // So we need to use attribute starts-with selector
-      let markerSpan: HTMLElement | null = this.notePreviewEl?.querySelector(`span.mindmap-footnote-marker[data-footnote-id^="${footnoteId}"]`) as HTMLElement | null;
-      
-      console.log('[DEBUG] Marker found on first try:', !!markerSpan);
-      if (markerSpan) {
-        console.log('[DEBUG] Found marker with ID:', markerSpan.dataset.footnoteId);
-      }
-      
-      // If not found, check if we need to re-render
-      if (!markerSpan) {
-        console.log('[DEBUG] Marker not found, checking if markdown needs re-render');
-        
-        // Get the current node to check if it has the footnote
-        const node = findNodeById(this.doc!, this.selectedNodeId!);
-        if (node && node.note) {
-          const hasFootnote = node.note.includes(`[^${footnoteId}::`);
-          console.log('[DEBUG] Node has footnote in source:', hasFootnote);
-          
-          if (hasFootnote) {
-            // Footnote exists in source but not rendered, trigger re-render
-            console.log('[DEBUG] Triggering markdown re-render');
-            this.scheduleMarkdownRender(node.note);
-            
-            // Wait longer for render to complete (scheduleMarkdownRender has 60ms delay + rendering time)
-            setTimeout(() => {
-              // Use attribute starts-with selector to handle potential suffixes added by Obsidian
-              markerSpan = this.notePreviewEl?.querySelector(`span.mindmap-footnote-marker[data-footnote-id^="${footnoteId}"]`) as HTMLElement | null;
-              console.log('[DEBUG] Marker found after re-render:', !!markerSpan);
-              if (markerSpan) {
-                console.log('[DEBUG] Found marker with ID:', markerSpan.dataset.footnoteId);
-              }
-              
-              if (markerSpan) {
-                this.highlightAndScrollMarker(markerSpan);
-              } else {
-                // Try one more time with additional delay
-                console.log('[DEBUG] Still not found, trying again with more delay');
-                setTimeout(() => {
-                  // Use attribute starts-with selector to handle potential suffixes added by Obsidian
-                  markerSpan = this.notePreviewEl?.querySelector(`span.mindmap-footnote-marker[data-footnote-id^="${footnoteId}"]`) as HTMLElement | null;
-                  console.log('[DEBUG] Marker found after second retry:', !!markerSpan);
-                  if (markerSpan) {
-                    console.log('[DEBUG] Found marker with ID:', markerSpan.dataset.footnoteId);
-                  }
-                  
-                  if (markerSpan) {
-                    this.highlightAndScrollMarker(markerSpan);
-                  } else {
-                    console.log('[DEBUG] Still not found after second retry');
-                    new Notice("未找到脚注标记，请尝试刷新页面");
-                  }
-                }, 300);
-              }
-            }, 400);
-            return;
-          }
-        }
-        
-        console.log('[DEBUG] Footnote marker not found in preview');
-        new Notice("未找到脚注标记");
-        return;
-      }
-      
-      // Marker found, highlight and scroll
-      this.highlightAndScrollMarker(markerSpan);
-    }
-  }
-  
-  private highlightAndScrollMarker(markerSpan: HTMLElement): void {
-    console.log('[DEBUG] Highlighting and scrolling to marker');
-    
-    // Scroll to the marker
-    markerSpan.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    
-    // Add flash animation
-    markerSpan.addClass('mindmap-footnote-marker-flash');
-    setTimeout(() => {
-      markerSpan.removeClass('mindmap-footnote-marker-flash');
-    }, 1500);
-  }
-  
-  private getPositionScrollTop(position: number): number {
-    // Estimate scroll position based on character position
-    // This is a rough estimate - actual implementation would need line metrics
-    const doc = this.noteEditorView?.state.doc;
-    if (!doc) return 0;
-    
-    const line = doc.lineAt(position);
-    const lineHeight = 24; // Approximate line height in pixels
-    return line.number * lineHeight;
-  }
-  
-  private flashEditorPosition(startPos: number, length: number): void {
-    // Visual feedback for editor positioning
-    // In a full implementation, this would add a temporary highlight overlay
-    console.log('[DEBUG] Flashing editor position:', startPos, 'length:', length);
   }
 
   private getNotePreviewPlainTextFromSelection(selection: Selection): string {
@@ -4972,7 +4740,7 @@ export class MindmapView extends ItemView {
   }
 
   private handleAddComment(): void {
-    console.log('[DEBUG] handleAddComment called (footnote mode)');
+    console.log('[DEBUG] handleAddComment called');
     console.log('[DEBUG] this.doc exists:', !!this.doc);
     console.log('[DEBUG] this.selectedNodeId:', this.selectedNodeId);
     
@@ -4984,42 +4752,18 @@ export class MindmapView extends ItemView {
     // Get selected text and position
     let selectedText = "";
     let selectionStart = 0;
-    let isEditMode = false;
     
     console.log('[DEBUG] Checking mode - is-editing:', this.noteSurfaceEl?.hasClass("is-editing"));
+    console.log('[DEBUG] noteEditorView exists:', !!this.noteEditorView);
+    console.log('[DEBUG] isMobileLayout:', this.isMobileLayout);
     
-    // Check if in edit mode
-    if (this.noteSurfaceEl?.hasClass("is-editing")) {
-      isEditMode = true;
-      if (this.noteEditorView && !this.isMobileLayout) {
-        // Edit mode with CodeMirror
-        console.log('[DEBUG] Handling CodeMirror editor mode comment');
-        const selection = this.noteEditorView.state.selection.main;
-        if (selection.empty) {
-          console.log('[DEBUG] Empty selection in editor');
-          this.hideNoteSelectionToolbar();
-          return;
-        }
-        selectedText = this.noteEditorView.state.doc.sliceString(selection.from, selection.to);
-        selectionStart = selection.from;
-      } else {
-        // Edit mode with textarea
-        console.log('[DEBUG] Handling textarea mode comment');
-        const input = this.noteInputEl;
-        const start = input.selectionStart ?? 0;
-        const end = input.selectionEnd ?? 0;
-        if (start === end) {
-          console.log('[DEBUG] Empty selection in textarea');
-          this.hideNoteSelectionToolbar();
-          return;
-        }
-        selectedText = input.value.slice(start, end);
-        selectionStart = start;
-      }
-    } else {
-      // Preview mode: get selection from window
+    // Preview mode: get selection from window
+    if (!this.noteSurfaceEl?.hasClass("is-editing")) {
       console.log('[DEBUG] Handling preview mode comment');
       const selection = window.getSelection();
+      console.log('[DEBUG] Window selection exists:', !!selection);
+      console.log('[DEBUG] Selection isCollapsed:', selection?.isCollapsed);
+      console.log('[DEBUG] Selection text:', selection?.toString());
       
       if (!selection || selection.isCollapsed || selection.toString().trim().length === 0) {
         console.log('[DEBUG] No valid selection in preview mode');
@@ -5030,8 +4774,10 @@ export class MindmapView extends ItemView {
       selectedText = selection.toString();
       console.log('[DEBUG] Selected text:', selectedText);
       
-      // Calculate position by finding the text in Markdown source (node.note)
+      // Calculate position by traversing DOM to find the exact location
       const node = findNodeById(this.doc!, this.selectedNodeId!);
+      console.log('[DEBUG] Node found:', !!node);
+      console.log('[DEBUG] Node note length:', node?.note?.length);
       
       if (!node || !node.note) {
         console.log('[DEBUG] Node or note not found');
@@ -5040,63 +4786,88 @@ export class MindmapView extends ItemView {
         return;
       }
       
-      // Find all occurrences of selectedText in node.note
-      const occurrences: number[] = [];
-      let searchIndex = 0;
-      while (true) {
-        const idx = node.note.indexOf(selectedText, searchIndex);
-        if (idx === -1) break;
-        occurrences.push(idx);
-        searchIndex = idx + 1;
+      // Get the range of the selection
+      const range = selection.getRangeAt(0);
+      
+      // Create a TreeWalker to traverse all text nodes in order
+      const walker = document.createTreeWalker(
+        this.notePreviewEl,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+      
+      let charCount = 0;
+      let foundPosition = -1;
+      let currentNode: Node | null = walker.nextNode();
+      
+      while (currentNode) {
+        const textContent = currentNode.textContent || '';
+        
+        // Check if this node contains the start of our selection
+        if (range.startContainer === currentNode || 
+            (range.startContainer.nodeType === Node.ELEMENT_NODE && 
+             range.startContainer.contains(currentNode))) {
+          
+          // Calculate offset within this text node
+          const offsetInNode = range.startOffset;
+          foundPosition = charCount + offsetInNode;
+          console.log('[DEBUG] Found selection start in text node at offset:', offsetInNode);
+          console.log('[DEBUG] Global position:', foundPosition);
+          break;
+        }
+        
+        charCount += textContent.length;
+        currentNode = walker.nextNode();
       }
       
-      console.log('[DEBUG] Found', occurrences.length, 'occurrences of selected text at positions:', occurrences);
+      if (foundPosition === -1) {
+        console.log('[DEBUG] Could not calculate position from DOM, falling back to indexOf');
+        selectionStart = node.note.indexOf(selectedText);
+      } else {
+        selectionStart = foundPosition;
+      }
       
-      if (occurrences.length === 0) {
-        console.log('[DEBUG] Text not found in node.note');
+      console.log('[DEBUG] Selection start position:', selectionStart);
+      
+      if (selectionStart === -1) {
+        console.log('[DEBUG] Text not found at exact position');
         this.hideNoteSelectionToolbar();
-        new Notice("无法在节点内容中找到选中文本");
+        new Notice("无法定位选中文本在节点中的位置");
         return;
       }
-      
-      if (occurrences.length === 1) {
-        // Only one occurrence, use it directly
-        selectionStart = occurrences[0];
-        console.log('[DEBUG] Single occurrence found at position:', selectionStart);
-      } else {
-        // Multiple occurrences - show a modal to let user choose which one
-        console.log('[DEBUG] Multiple occurrences detected, showing selection modal');
-        
-        const modal = new TextSelectionModal(
-          this.app,
-          selectedText,
-          occurrences,
-          node.note,
-          (selectedIndex: number) => {
-            console.log('[DEBUG] User selected occurrence', selectedIndex + 1, 'at position:', occurrences[selectedIndex]);
-            selectionStart = occurrences[selectedIndex];
-            
-            // Continue with comment modal after selection
-            this.showCommentModal(selectedText, selectionStart, isEditMode);
-          }
-        );
-        
-        modal.open();
-        return; // Exit early, the rest will be handled in the callback
+    } else if (this.noteEditorView && !this.isMobileLayout) {
+      // Edit mode with CodeMirror
+      console.log('[DEBUG] Handling CodeMirror editor mode comment');
+      const selection = this.noteEditorView.state.selection.main;
+      if (selection.empty) {
+        console.log('[DEBUG] Empty selection in editor');
+        this.hideNoteSelectionToolbar();
+        return;
       }
+      selectedText = this.noteEditorView.state.doc.sliceString(selection.from, selection.to);
+      selectionStart = selection.from;
+    } else {
+      // Edit mode with textarea
+      console.log('[DEBUG] Handling textarea mode comment');
+      const input = this.noteInputEl;
+      const start = input.selectionStart ?? 0;
+      const end = input.selectionEnd ?? 0;
+      if (start === end) {
+        console.log('[DEBUG] Empty selection in textarea');
+        this.hideNoteSelectionToolbar();
+        return;
+      }
+      selectedText = input.value.slice(start, end);
+      selectionStart = start;
     }
     
     console.log('[DEBUG] Opening comment modal with text:', selectedText);
-    this.showCommentModal(selectedText, selectionStart, isEditMode);
-  }
-
-  private showCommentModal(selectedText: string, selectionStart: number, isEditMode: boolean): void {
-    console.log('[DEBUG] Opening comment modal with text:', selectedText);
     
-    // Show comment modal
+    // Show comment modal instead of prompt
     const modal = new CommentModal(this.app, selectedText, (comment: string) => {
       console.log('[DEBUG] Comment submitted:', comment);
       
+      // Add comment to node
       const node = findNodeById(this.doc!, this.selectedNodeId!);
       if (!node) {
         console.log('[DEBUG] Node not found when saving comment');
@@ -5107,80 +4878,29 @@ export class MindmapView extends ItemView {
         node.comments = [];
       }
       
-      // Generate unique footnote ID (c1, c2, c3...)
-      const existingIds = node.comments.map(c => c.footnoteId || '').filter(id => id.startsWith('c'));
-      const maxNum = existingIds.reduce((max, id) => {
-        const num = parseInt(id.substring(1));
-        return isNaN(num) ? max : Math.max(max, num);
-      }, 0);
-      const footnoteId = `c${maxNum + 1}`;
-      
-      console.log('[DEBUG] Generated footnote ID:', footnoteId);
-      
-      // Create footnote marker: [^c1::选中的原文]
-      const footnoteMarker = `[^${footnoteId}::${selectedText}]`;
-      
-      // Replace selected text with footnote marker in node.note
-      if (isEditMode) {
-        // In edit mode, replace the selected text
-        if (this.noteEditorView && !this.isMobileLayout) {
-          // CodeMirror editor
-          const view = this.noteEditorView;
-          view.dispatch({
-            changes: { from: selectionStart, to: selectionStart + selectedText.length, insert: footnoteMarker },
-            scrollIntoView: true
-          });
-          view.focus();
-        } else {
-          // Textarea editor
-          const input = this.noteInputEl;
-          const before = input.value.substring(0, selectionStart);
-          const after = input.value.substring(selectionStart + selectedText.length);
-          input.value = before + footnoteMarker + after;
-          input.setSelectionRange(selectionStart + footnoteMarker.length, selectionStart + footnoteMarker.length);
-          input.dispatchEvent(new Event("input"));
-          input.focus({ preventScroll: true });
-        }
-        
-        // Update node.note
-        node.note = isEditMode 
-          ? (this.noteEditorView ? this.noteEditorView.state.doc.toString() : this.noteInputEl.value)
-          : node.note;
-      } else {
-        // In preview mode, replace the selected text in node.note
-        if (!node.note) {
-          console.log('[DEBUG] Node note is empty in preview mode');
-          return;
-        }
-        const before = node.note.substring(0, selectionStart);
-        const after = node.note.substring(selectionStart + selectedText.length);
-        node.note = before + footnoteMarker + after;
-      }
-      
-      // Save comment metadata (for reference in comments panel)
       const newComment: MindmapComment = {
         id: crypto.randomUUID(),
         text: selectedText,
         comment: comment.trim(),
-        footnoteId: footnoteId,
-        position: selectionStart, // Keep for backward compatibility
+        position: selectionStart,
         length: selectedText.length,
         createdAt: Date.now()
       };
       
       node.comments.push(newComment);
-      console.log('[DEBUG] Comment added with footnote marker, saving...');
+      console.log('[DEBUG] Comment added, saving...');
       this.requestSave();
       
       // Show comments panel
       this.showCommentsPanel();
       
-      // Re-render markdown to show the footnote marker
-      if (!isEditMode) {
-        console.log('[DEBUG] Re-rendering markdown to show footnote marker');
+      // Immediately highlight the commented text in preview mode
+      if (!this.noteSurfaceEl?.hasClass("is-editing")) {
+        console.log('[DEBUG] Applying highlight to new comment immediately');
+        // Delay slightly to ensure DOM is stable
         window.setTimeout(() => {
-          this.scheduleMarkdownRender(node.note ?? "");
-        }, 50);
+          this.highlightCommentedText();
+        }, 100);
       }
     });
     
@@ -5208,92 +4928,6 @@ export class MindmapView extends ItemView {
       this.noteCommentsPanelEl.addClass("is-hidden");
       this.layoutEl?.removeClass("has-comments");
       this.editingCommentId = null;
-    }
-  }
-
-  private deleteComment(node: MindmapNode, commentId: string): void {
-    const confirmed = confirm("确定要删除这条评论吗？");
-    if (!confirmed) {
-      return;
-    }
-    
-    // Find the comment to get its footnote ID
-    const comment = node.comments?.find(c => c.id === commentId);
-    
-    if (node.comments) {
-      // Remove from comments array
-      node.comments = node.comments.filter(c => c.id !== commentId);
-      
-      // If using footnote mode, also remove the footnote marker from the source
-      if (comment && comment.footnoteId) {
-        const footnotePattern = `[^${comment.footnoteId}::`;
-        
-        if (this.noteSurfaceEl?.hasClass("is-editing")) {
-          // In edit mode, remove from editor content
-          if (this.noteEditorView && !this.isMobileLayout) {
-            // CodeMirror editor
-            const doc = this.noteEditorView.state.doc;
-            const text = doc.toString();
-            const startPos = text.indexOf(footnotePattern);
-            
-            if (startPos !== -1) {
-              const endPos = text.indexOf(']', startPos);
-              if (endPos !== -1) {
-                // Remove the footnote marker including the closing bracket
-                this.noteEditorView.dispatch({
-                  changes: { from: startPos, to: endPos + 1, insert: '' }
-                });
-                
-                // Update node.note after deletion
-                node.note = this.noteEditorView.state.doc.toString();
-              }
-            }
-          } else {
-            // Textarea editor
-            const input = this.noteInputEl;
-            const text = input.value;
-            const startPos = text.indexOf(footnotePattern);
-            
-            if (startPos !== -1) {
-              const endPos = text.indexOf(']', startPos);
-              if (endPos !== -1) {
-                // Remove the footnote marker
-                const before = text.substring(0, startPos);
-                const after = text.substring(endPos + 1);
-                input.value = before + after;
-                input.dispatchEvent(new Event("input"));
-                
-                // Update node.note
-                node.note = input.value;
-              }
-            }
-          }
-        } else {
-          // In preview mode, remove from node.note directly
-          const text = node.note || "";
-          const startPos = text.indexOf(footnotePattern);
-          
-          if (startPos !== -1) {
-            const endPos = text.indexOf(']', startPos);
-            if (endPos !== -1) {
-              const before = text.substring(0, startPos);
-              const after = text.substring(endPos + 1);
-              node.note = before + after;
-            }
-          }
-        }
-      }
-      
-      this.requestSave();
-      this.renderCommentsList(node);
-      
-      // Re-render markdown to update the preview
-      if (!this.noteSurfaceEl?.hasClass("is-editing") && node.note) {
-        console.log('[DEBUG] Re-rendering markdown after comment deletion');
-        window.setTimeout(() => {
-          this.scheduleMarkdownRender(node.note ?? "");
-        }, 50);
-      }
     }
   }
 
@@ -5330,26 +4964,8 @@ export class MindmapView extends ItemView {
         return;
       }
       console.log('[DEBUG] Comment card clicked, scrolling to highlighted text:', comment.id);
-      
-      // If using footnote mode, jump to the footnote marker in the source
-      if (comment.footnoteId) {
-        this.scrollToFootnoteMarker(comment.footnoteId);
-      } else {
-        // Legacy mode: use position-based highlighting
-        this.scrollToHighlightedText(comment.id);
-      }
+      this.scrollToHighlightedText(comment.id);
     });
-    
-    // Header with footnote ID indicator
-    const headerEl = cardEl.createDiv({ cls: "mindmap-comment-header" });
-    
-    if (comment.footnoteId) {
-      const footnoteBadge = headerEl.createSpan({ 
-        cls: "mindmap-footnote-badge",
-        text: `[^${comment.footnoteId}]`
-      });
-      footnoteBadge.title = "点击定位到源码位置";
-    }
     
     // Quoted text
     const quoteEl = cardEl.createDiv({ cls: "mindmap-comment-quote" });
@@ -5418,21 +5034,25 @@ export class MindmapView extends ItemView {
       this.requestSave();
       this.editingCommentId = null;
       this.renderCommentsList(node);
-      
-      // Update highlights after editing (text content unchanged, but refresh anyway)
-      if (!this.noteSurfaceEl?.hasClass("is-editing")) {
-        console.log('[DEBUG] Updating highlights after comment edit');
-        window.setTimeout(() => {
-          this.highlightCommentedText();
-        }, 100);
-      }
-  }
     }
+  }
+
+  private deleteComment(node: MindmapNode, commentId: string): void {
+    const confirmed = confirm("确定要删除这条评论吗？");
+    if (!confirmed) {
+      return;
+    }
+    
+    if (node.comments) {
+      node.comments = node.comments.filter(c => c.id !== commentId);
+      this.requestSave();
+      this.renderCommentsList(node);
+    }
+  }
 
 
   private prepareMarkdownForPreview(markdown: string): string {
-    // First, process image links
-    let processed = markdown.replace(/!\[\[([^\]]+)\]\]/g, (full, rawTarget: string) => {
+    return markdown.replace(/!\[\[([^\]]+)\]\]/g, (full, rawTarget: string) => {
       const target = rawTarget.split("|")[0]?.trim();
       if (!target) {
         return full;
@@ -5456,19 +5076,13 @@ export class MindmapView extends ItemView {
       const resourceUrl = this.app.vault.getResourcePath(file);
       return `![](${resourceUrl})`;
     });
-    
-    // Then, process footnote-style comments: [^c1::original text]
-    // Replace with the original text wrapped in a clickable highlighted span
-    processed = processed.replace(/\[\^([a-zA-Z0-9]+)::([^\]]+)\]/g, (match, footnoteId, originalText) => {
-      // Create a clickable highlighted span for the original text
-      return `<span class="mindmap-footnote-marker" data-footnote-id="${footnoteId}" title="点击查看评论">${originalText}</span>`;
-    });
-    return processed;
   }
 
   private updateDrawerWidth(): void {
-    // Only enforce minimum width, no maximum limit
-    this.drawerWidth = Math.max(MindmapView.MIN_DRAWER_WIDTH, this.drawerWidth);
+    const viewportWidth = this.layoutEl?.clientWidth || window.innerWidth;
+    const maxDrawerWidth = Math.floor(viewportWidth * MindmapView.MAX_DRAWER_WIDTH_RATIO);
+    const boundedMaxDrawerWidth = Math.max(MindmapView.MIN_DRAWER_WIDTH, Math.min(MindmapView.MAX_DRAWER_WIDTH, maxDrawerWidth));
+    this.drawerWidth = Math.min(Math.max(this.drawerWidth, MindmapView.MIN_DRAWER_WIDTH), boundedMaxDrawerWidth);
     this.layoutEl?.style.setProperty("--mindmap-drawer-width", `${this.drawerWidth}px`);
   }
 
@@ -5487,9 +5101,15 @@ export class MindmapView extends ItemView {
 
     const onMove = (moveEvent: PointerEvent): void => {
       const delta = startX - moveEvent.clientX;
-      // Only enforce minimum width, no maximum limit
-      this.drawerWidth = Math.max(MindmapView.MIN_DRAWER_WIDTH, startWidth + delta);
-      this.updateDrawerWidth();
+      const viewportWidth = this.layoutEl?.clientWidth || window.innerWidth;
+      const maxDrawerWidth = Math.max(
+        MindmapView.MIN_DRAWER_WIDTH,
+        Math.min(MindmapView.MAX_DRAWER_WIDTH, Math.floor(viewportWidth * MindmapView.MAX_DRAWER_WIDTH_RATIO))
+      );
+      this.drawerWidth = Math.min(
+        maxDrawerWidth,
+        Math.max(MindmapView.MIN_DRAWER_WIDTH, startWidth + delta)
+      );
       this.updateDrawerWidth();
     };
 

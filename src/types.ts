@@ -1,3 +1,14 @@
+export interface MindmapComment {
+  id: string;
+  text: string;
+  comment: string;
+  position?: number; // Deprecated, kept for backward compatibility
+  length?: number;   // Deprecated, kept for backward compatibility
+  footnoteId?: string; // New: unique footnote identifier like "c1", "c2"
+  createdAt: number;
+  updatedAt?: number;
+}
+
 export interface MindmapNode {
   id: string;
   title: string;
@@ -9,6 +20,7 @@ export interface MindmapNode {
   collapsed?: boolean;
   note?: string;
   linkTarget?: string;
+  comments?: MindmapComment[];
   children: MindmapNode[];
 }
 

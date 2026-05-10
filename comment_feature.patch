@@ -1,0 +1,298 @@
+diff --git a/src/types.ts b/src/types.ts
+index 3cb14ad..57632df 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -1,50 +1 @@
+-export interface MindmapNode {
+-  id: string;
+-  title: string;
+-  x: number;
+-  y: number;
+-  width?: number;
+-  height?: number;
+-  manualSize?: boolean;
+-  collapsed?: boolean;
+-  note?: string;
+-  linkTarget?: string;
+-  children: MindmapNode[];
+-}
+-
+-export interface MindmapDocument {
+-  version: 1;
+-  root: MindmapNode;
+-  selfPath?: string;
+-}
+-
+-export const createDefaultMindmap = (): MindmapDocument => ({
+-  version: 1,
+-  root: {
+-    id: crypto.randomUUID(),
+-    title: "中心主题",
+-    x: 240,
+-    y: 200,
+-    collapsed: false,
+-    note: "这里支持 **Markdown** 笔记。",
+-    children: [
+-      {
+-        id: crypto.randomUUID(),
+-        title: "子主题 A",
+-        x: 460,
+-        y: 140,
+-        note: "暂无内容",
+-        children: []
+-      },
+-      {
+-        id: crypto.randomUUID(),
+-        title: "子主题 B",
+-        x: 460,
+-        y: 260,
+-        linkTarget: "",
+-        note: "暂无内容",
+-        children: []
+-      }
+-    ]
+-  }
+-});
++export interface Mindmap
+\ No newline at end of file
+diff --git a/styles.css b/styles.css
+index f1cf148..c42cd60 100644
+--- a/styles.css
++++ b/styles.css
+@@ -1667,4 +1667,234 @@
+ 
+  .mindmap-note-surface.is-editing .mindmap-note-preview {
+    display: none;
+- }
+\ No newline at end of file
++ }
++
++/* Comment Panel Styles */
++.mindmap-comments-panel {
++  position: absolute;
++  right: 0;
++  top: 0;
++  bottom: 0;
++  width: 320px;
++  background: var(--background-secondary);
++  border-left: 1px solid var(--background-modifier-border);
++  display: flex;
++  flex-direction: column;
++  z-index: 20;
++  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
++}
++
++.mindmap-comments-panel.is-hidden {
++  display: none;
++}
++
++.mindmap-comments-header {
++  padding: 16px;
++  border-bottom: 1px solid var(--background-modifier-border);
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++}
++
++.mindmap-comments-title {
++  font-size: 14px;
++  font-weight: 600;
++  color: var(--text-normal);
++  margin: 0;
++}
++
++.mindmap-comments-close {
++  width: 28px;
++  height: 28px;
++  padding: 0;
++  border: none;
++  border-radius: 6px;
++  background: transparent;
++  color: var(--text-muted);
++  font-size: 20px;
++  line-height: 1;
++  cursor: pointer;
++  transition: all 0.15s ease;
++}
++
++.mindmap-comments-close:hover {
++  background: var(--background-modifier-hover);
++  color: var(--text-normal);
++}
++
++.mindmap-comments-list {
++  flex: 1;
++  overflow-y: auto;
++  padding: 12px;
++  display: flex;
++  flex-direction: column;
++  gap: 12px;
++}
++
++.mindmap-comment-card {
++  background: var(--background-primary);
++  border: 1px solid var(--background-modifier-border);
++  border-radius: 8px;
++  padding: 12px;
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++  transition: all 0.15s ease;
++}
++
++.mindmap-comment-card:hover {
++  border-color: var(--interactive-accent);
++  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
++}
++
++.mindmap-comment-quote {
++  padding: 8px 10px;
++  border-left: 3px solid var(--interactive-accent);
++  background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
++  border-radius: 4px;
++  font-size: 12px;
++  line-height: 1.5;
++  color: var(--text-muted);
++  font-style: italic;
++  max-height: 80px;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++
++.mindmap-comment-body {
++  font-size: 13px;
++  line-height: 1.6;
++  color: var(--text-normal);
++}
++
++.mindmap-comment-body p:first-child {
++  margin-top: 0;
++}
++
++.mindmap-comment-body p:last-child {
++  margin-bottom: 0;
++}
++
++.mindmap-comment-body code {
++  background: color-mix(in srgb, var(--text-muted) 12%, transparent);
++  padding: 2px 5px;
++  border-radius: 4px;
++  font-family: var(--font-monospace);
++  font-size: 12px;
++}
++
++.mindmap-comment-meta {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  font-size: 11px;
++  color: var(--text-faint);
++  margin-top: 4px;
++}
++
++.mindmap-comment-actions {
++  display: flex;
++  gap: 6px;
++}
++
++.mindmap-comment-action-btn {
++  padding: 4px 8px;
++  border: none;
++  border-radius: 4px;
++  background: transparent;
++  color: var(--text-muted);
++  font-size: 12px;
++  cursor: pointer;
++  transition: all 0.15s ease;
++}
++
++.mindmap-comment-action-btn:hover {
++  background: var(--background-modifier-hover);
++  color: var(--text-normal);
++}
++
++.mindmap-comment-action-btn.delete:hover {
++  background: rgba(255, 77, 79, 0.1);
++  color: rgb(255, 77, 79);
++}
++
++.mindmap-comment-edit-input {
++  width: 100%;
++  min-height: 60px;
++  padding: 8px;
++  border: 1px solid var(--background-modifier-border);
++  border-radius: 6px;
++  background: var(--background-primary);
++  color: var(--text-normal);
++  font-size: 13px;
++  line-height: 1.6;
++  resize: vertical;
++  font-family: inherit;
++}
++
++.mindmap-comment-edit-input:focus {
++  outline: none;
++  border-color: var(--interactive-accent);
++  box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.15);
++}
++
++.mindmap-comment-edit-actions {
++  display: flex;
++  gap: 8px;
++  margin-top: 8px;
++}
++
++.mindmap-comment-save-btn,
++.mindmap-comment-cancel-btn {
++  padding: 6px 12px;
++  border: none;
++  border-radius: 6px;
++  font-size: 12px;
++  cursor: pointer;
++  transition: all 0.15s ease;
++}
++
++.mindmap-comment-save-btn {
++  background: var(--interactive-accent);
++  color: white;
++}
++
++.mindmap-comment-save-btn:hover {
++  background: var(--interactive-accent-hover);
++}
++
++.mindmap-comment-cancel-btn {
++  background: var(--background-modifier-hover);
++  color: var(--text-normal);
++}
++
++.mindmap-comment-cancel-btn:hover {
++  background: var(--background-modifier-border);
++}
++
++.mindmap-empty-comments {
++  flex: 1;
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  justify-content: center;
++  padding: 40px 20px;
++  text-align: center;
++  color: var(--text-faint);
++}
++
++.mindmap-empty-comments-icon {
++  font-size: 48px;
++  margin-bottom: 16px;
++  opacity: 0.5;
++}
++
++.mindmap-empty-comments-text {
++  font-size: 13px;
++  line-height: 1.6;
++}
++
++/* Adjust drawer layout when comments panel is visible */
++.mindmap-root-view.has-comments .mindmap-drawer {
++  margin-right: 320px;
++}
