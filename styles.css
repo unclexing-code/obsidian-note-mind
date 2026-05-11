@@ -1696,6 +1696,11 @@
   align-items: center;
 }
 
+/* Mobile specific styles for comments header */
+.mindmap-root-view.is-mobile .mindmap-comments-header {
+  padding-top: 60px;
+}
+
 .mindmap-comments-title {
   font-size: 14px;
   font-weight: 600;
@@ -1742,6 +1747,10 @@
   transition: all 0.15s ease;
 }
 
+.mindmap-comment-card .markdown-preview-view {
+  padding: 0!important;
+}
+
 .mindmap-comment-card:hover {
   border-color: var(--interactive-accent);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -1780,6 +1789,7 @@
   color: var(--text-muted);
   font-style: italic;
   max-height: 80px;
+  min-height: 30px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2059,31 +2069,57 @@
 .mindmap-footnote-marker:hover {
   /* background: linear-gradient(135deg, #FFD93D 0%, #F39C12 100%); */
   transform: translateY(-1px);
-  box-shadow: 0 2px 6px rgba(243, 156, 18, 0.3);
 }
+
+.mindmap-footnote-marker-flash {
+  animation: mindmap-footnote-flash 1.5s ease-in-out;
+}
+
+@keyframes mindmap-footnote-flash {
+  0%, 100% {
+    background: linear-gradient(120deg, rgba(66, 133, 244, 0.4) 0%, rgba(66, 133, 244, 0.2) 100%);
+    box-shadow: none;
+    border-color: #4285f4;
+  }
+  25% {
+    background: linear-gradient(120deg, rgba(66, 133, 244, 0.9) 0%, rgba(66, 133, 244, 0.7) 100%);
+    box-shadow: 0 0 20px rgba(66, 133, 244, 0.8), 0 0 40px rgba(66, 133, 244, 0.4);
+    border-color: #4285f4;
+  }
+  50% {
+    background: red;
+    box-shadow: 0 0 25px rgba(66, 133, 244, 1), 0 0 50px rgba(66, 133, 244, 0.6);
+    border-color: #4285f4;
+    transform: scale(1.02);
+  }
+  75% {
+    background: linear-gradient(120deg, rgba(66, 133, 244, 0.9) 0%, rgba(66, 133, 244, 0.7) 100%);
+    box-shadow: 0 0 20px rgba(66, 133, 244, 0.8), 0 0 40px rgba(66, 133, 244, 0.4);
+    border-color: #4285f4;
+  }
+}
+
+
 
 .mindmap-footnote-marker:active {
   transform: translateY(0);
 }
 
-.mindmap-footnote-marker-flash {
-  animation: mindmap-footnote-flash 0.3s ease-in-out;
-}
 
-@keyframes mindmap-footnote-flash {
+/* @keyframes mindmap-footnote-flash {
   0%, 100% {
     background: linear-gradient(135deg, #FFEAA7 0%, #FDCB6E 100%);
     box-shadow: 0 1px 3px rgba(243, 156, 18, 0.2);
   }
   25%, 75% {
-    background: linear-gradient(135deg, #FFD93D 0%, #F39C12 100%);
+    background: red;
     box-shadow: 0 2px 6px rgba(243, 156, 18, 0.3);
   }
   50% {
     background: linear-gradient(135deg, #FFD93D 0%, #F39C12 100%);
     box-shadow: 0 3px 9px rgba(243, 156, 18, 0.4);
   }
-}
+} */
 
 /* Textarea Flash Animation */
 .mindmap-textarea-flash {

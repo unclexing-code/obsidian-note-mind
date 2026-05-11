@@ -449,11 +449,17 @@ export default class MindmapPlugin extends Plugin {
         leaves,
         leavesJson: JSON.stringify(leaves.map((leaf) => this.snapshotLeaf(leaf)))
       });
-      if (leaves.length <= 1) {
+      
+      // Allow multiple leaves for the same file to support split panes
+      // Only dedupe if there are more than 2 leaves (likely accidental duplicates)
+      if (leaves.length <= 2) {
         if (leaves[0]) {
           this.preferredLeafIds.set(file.path, this.getLeafId(leaves[0]));
         }
-        this.logTabDebug("ensure-single:no-duplicates", { file: file.path });
+        this.logTabDebug("ensure-single:allow-multiple-leaves", { 
+          file: file.path, 
+          count: leaves.length 
+        });
         return;
       }
 
@@ -551,12 +557,14 @@ export default class MindmapPlugin extends Plugin {
       });
 
       for (const [path, leaves] of groups) {
-        if (leaves.length <= 1) {
+        // Allow up to 2 leaves per file to support split panes
+        if (leaves.length <= 2) {
           if (leaves[0]) {
             this.preferredLeafIds.set(path, this.getLeafId(leaves[0]));
           }
           continue;
         }
+        
         const keeper = this.pickKeeperLeaf(path, leaves);
         this.logTabDebug("ensure-unique:keeper-picked", {
           path,
@@ -591,6 +599,7 @@ export default class MindmapPlugin extends Plugin {
         }
         this.app.workspace.revealLeaf(keeper);
       }
+
       this.logTabDebug("ensure-unique:done");
     } finally {
       this.isApplyingDedupe = false;

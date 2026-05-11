@@ -4446,10 +4446,34 @@ export class MindmapView extends ItemView {
     
     if (!highlightSpan) {
       console.log('[DEBUG] Highlight span not found, may need to re-render');
-      new Notice("未找到高亮文本，请刷新预览");
+      
+      // Try to re-render highlights
+      const node = findNodeById(this.doc!, this.selectedNodeId!);
+      if (node && node.comments && node.comments.length > 0) {
+        console.log('[DEBUG] Re-rendering highlights for', node.comments.length, 'comments');
+        this.highlightCommentedText();
+        
+        // Wait for render and try again
+        setTimeout(() => {
+          const retrySpan = this.notePreviewEl.querySelector(`span.mindmap-comment-highlight[data-comment-id="${commentId}"]`);
+          if (retrySpan) {
+            console.log('[DEBUG] Found highlight after re-render');
+            this.animateHighlight(retrySpan);
+          } else {
+            new Notice("未找到高亮文本，请刷新预览");
+          }
+        }, 200);
+      } else {
+        new Notice("未找到高亮文本，请刷新预览");
+      }
       return;
     }
     
+    console.log('[DEBUG] Found highlight span, applying animation');
+    this.animateHighlight(highlightSpan);
+  }
+  
+  private animateHighlight(highlightSpan: HTMLElement): void {
     // Scroll to the highlight with smooth animation
     highlightSpan.scrollIntoView({ behavior: 'smooth', block: 'center' });
     
@@ -4461,6 +4485,8 @@ export class MindmapView extends ItemView {
     
     console.log('[DEBUG] Successfully scrolled to highlighted text');
   }
+
+
   
   private scrollToFootnoteMarker(footnoteId: string): void {
     console.log('[DEBUG] Scrolling to footnote marker:', footnoteId);
@@ -5704,15 +5730,22 @@ export class MindmapView extends ItemView {
 
     const isMindmap = target.extension === "mindmap" || target.name.endsWith(".mindmap.json");
     if (isMindmap) {
-      const existingLeaf = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).find((leaf) => {
-        const view = leaf.view;
-        if (!(view instanceof MindmapView)) {
-          return false;
-        }
-        return view.getState().file === target.path;
-      });
       const normalizedFocusLinkedFromPath = focusLinkedFromPath ? normalizePath(focusLinkedFromPath) : null;
+      
+      // Only reuse existing leaf if NOT opening in new tab
+      let existingLeaf: WorkspaceLeaf | undefined;
+      if (!inNewTab) {
+        existingLeaf = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).find((leaf) => {
+          const view = leaf.view;
+          if (!(view instanceof MindmapView)) {
+            return false;
+          }
+          return view.getState().file === target.path;
+        });
+      }
+      
       const targetLeaf = existingLeaf ?? (inNewTab ? this.app.workspace.getLeaf(true) : this.leaf);
+      
       if (existingLeaf) {
         const view = existingLeaf.view;
         if (view instanceof MindmapView) {
@@ -5726,6 +5759,7 @@ export class MindmapView extends ItemView {
         this.app.workspace.revealLeaf(existingLeaf);
         return;
       }
+      
       await targetLeaf.setViewState({
         type: MINDMAP_VIEW_TYPE,
         active: true,
