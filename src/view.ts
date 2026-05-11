@@ -5963,20 +5963,30 @@ export class MindmapView extends ItemView {
     // Capture history snapshot before modification
     this.captureHistorySnapshot();
 
-    // Clone the node and its subtree
+    // Clone the node and its subtree (including comments)
     const clonedNode = this.cloneNode(node);
+
+    // Generate new file path in "思维导图" folder (not current folder)
+    const mindmapFolderPath = ASSOCIATED_MINDMAP_FOLDER_PATH;
+    const baseName = `${node.title} - 分离`;
+    const newPath = this.getNextMindmapPath(mindmapFolderPath, baseName);
+
+    // Add a back link to the original mindmap
+    // 1. In the note (Markdown text link)
+    const backLinkNote = `\n\n---\n\n[← 返回原导图](${this.file.path})`;
+    clonedNode.note = (clonedNode.note || "") + backLinkNote;
+    
+    // 2. Set linkTarget property for immediate visual feedback
+    clonedNode.linkTarget = this.file.path;
 
     // Create a new mindmap document with the cloned node as root
     const newDoc: MindmapDocument = {
       version: 1,
       root: clonedNode,
-      selfPath: undefined
+      selfPath: newPath  // Set selfPath immediately
     };
 
-    // Generate new file path in the same folder
-    const folderPath = this.file.parent?.path ?? "";
-    const baseName = `${node.title} - 分离`;
-    const newPath = this.getNextMindmapPath(folderPath, baseName);
+
 
     // Create the new mindmap file
     try {
@@ -5984,6 +5994,9 @@ export class MindmapView extends ItemView {
         newPath,
         JSON.stringify(newDoc, null, 2)
       );
+
+      // Store original comments before removing the node
+      const originalComments = node.comments || [];
 
       // Remove the original node from current document
       const parentLookup = findParentOfNode(this.doc, nodeId);
@@ -6009,7 +6022,8 @@ export class MindmapView extends ItemView {
         x: node.x,
         y: node.y,
         collapsed: false,
-        note: "",
+        note: node.note || "",  // Preserve the original note content
+        comments: originalComments.length > 0 ? [...originalComments] : undefined,  // Preserve comments
         linkTarget: newFile.path,
         children: []
       };
@@ -6025,7 +6039,7 @@ export class MindmapView extends ItemView {
       // Select the link node
       this.setSingleSelectedNode(linkNode.id);
 
-      // Save and render
+      // Save and render immediately
       this.normalizeLayoutKeepingNodePosition(linkNode.id);
       this.requestSave();
       this.renderMindmap();
