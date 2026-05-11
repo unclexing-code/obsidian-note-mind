@@ -10,6 +10,30 @@ export default class MindmapPlugin extends Plugin {
   private readonly preferredLeafIds = new Map<string, string>();
   private readonly dedupeTimers = new Set<number>();
   private isApplyingDedupe = false;
+  private readonly intentionalSplitLeafIds = new Set<string>();
+  private readonly SPLIT_SCREEN_PROTECTION_DELAY = 5000; // 5 seconds protection after explicit split creation
+  
+  // Method to be called by views when they create intentional splits
+  public markSplitCreation(leafId: string): void {
+    this.intentionalSplitLeafIds.add(leafId);
+    console.log('[MindmapPlugin] ✅ Marked intentional split:', leafId, 'Total protected:', this.intentionalSplitLeafIds.size);
+    this.logTabDebug("mark-split-creation", { leafId, totalProtected: this.intentionalSplitLeafIds.size });
+    
+    // Clean up after protection delay
+    window.setTimeout(() => {
+      this.intentionalSplitLeafIds.delete(leafId);
+      console.log('[MindmapPlugin] ❌ Cleared intentional split protection:', leafId);
+      this.logTabDebug("clear-split-protection", { leafId });
+    }, this.SPLIT_SCREEN_PROTECTION_DELAY);
+  }
+  
+  private isIntentionalSplit(leafId: string): boolean {
+    const result = this.intentionalSplitLeafIds.has(leafId);
+    if (result) {
+      console.log('[MindmapPlugin] 🔒 Leaf is protected:', leafId);
+    }
+    return result;
+  }
 
   async onload(): Promise<void> {
     this.registerView(MINDMAP_VIEW_TYPE, (leaf) => new MindmapView(leaf));
@@ -361,7 +385,7 @@ export default class MindmapPlugin extends Plugin {
   }
 
   private scheduleMindmapTabDedupe(file?: TFile): void {
-    const delays = [0, 30, 120, 360];
+    const delays = [30, 120, 360]; // Removed 0ms delay to avoid race conditions with new splits
     this.logTabDebug("schedule-dedupe", { file: file?.path, delays });
     for (const delay of delays) {
       const timer = window.setTimeout(() => {
@@ -383,7 +407,18 @@ export default class MindmapPlugin extends Plugin {
 
   private async openMindmapFile(file: TFile): Promise<void> {
     const existingLeaf = this.findLeafByFilePath(file.path) ?? this.findMindmapLeafByPath(file.path);
+    // Only reuse existing leaf if it exists; otherwise create a new split
     const leaf = existingLeaf ?? this.app.workspace.getLeaf(true);
+    
+    // If we're creating a new split (not reusing), mark the protection timestamp
+    if (!existingLeaf) {
+      this.lastSplitCreationTime = Date.now();
+      this.logTabDebug("open-mindmap-file:new-split-created", {
+        file: file.path,
+        targetLeafId: this.getLeafId(leaf)
+      });
+    }
+    
     this.logTabDebug("open-mindmap-file", {
       file: file.path,
       existingLeafId: existingLeaf ? this.getLeafId(existingLeaf) : null,
@@ -443,63 +478,67 @@ export default class MindmapPlugin extends Plugin {
     this.isApplyingDedupe = true;
     try {
       const leaves = this.getAllLeavesByFilePath(file.path);
+      
+      // Filter out intentional splits from deduplication consideration
+      const nonIntentionalLeaves = leaves.filter(leaf => !this.isIntentionalSplit(this.getLeafId(leaf)));
+      const intentionalLeaves = leaves.filter(leaf => this.isIntentionalSplit(this.getLeafId(leaf)));
+      
       this.logTabDebug("ensure-single:start", {
         debugWanted: "PLEASE_COPY_LEAVES_JSON",
         file: file.path,
-        leaves,
+        totalLeaves: leaves.length,
+        intentionalLeaves: intentionalLeaves.length,
+        nonIntentionalLeaves: nonIntentionalLeaves.length,
+        intentionalLeafIds: intentionalLeaves.map(l => this.getLeafId(l)),
         leavesJson: JSON.stringify(leaves.map((leaf) => this.snapshotLeaf(leaf)))
       });
       
-      // Allow multiple leaves for the same file to support split panes
-      // Only dedupe if there are more than 2 leaves (likely accidental duplicates)
-      if (leaves.length <= 2) {
+      // Allow up to 2 leaves for the same file (split-screen support)
+      // This applies to both intentional splits and regular splits (right-click tab)
+      const maxAllowedLeaves = 2;
+      
+      if (leaves.length <= maxAllowedLeaves) {
         if (leaves[0]) {
           this.preferredLeafIds.set(file.path, this.getLeafId(leaves[0]));
         }
-        this.logTabDebug("ensure-single:allow-multiple-leaves", { 
+        this.logTabDebug("ensure-single:allow-leaves", { 
           file: file.path, 
-          count: leaves.length 
+          count: leaves.length,
+          maxAllowed: maxAllowedLeaves,
+          reason: "Within allowed limit (split-screen supported)"
         });
         return;
       }
 
-      const keeper = this.pickKeeperLeaf(file.path, leaves);
-      this.logTabDebug("ensure-single:keeper-picked", {
+      // Close excess leaves beyond the allowed limit
+      const leavesToKeep = leaves.slice(0, maxAllowedLeaves);
+      const leavesToRemove = leaves.slice(maxAllowedLeaves);
+      
+      this.logTabDebug("ensure-single:excess-leaves", {
         file: file.path,
-        keeperId: this.getLeafId(keeper),
-        keeperType: keeper.view.getViewType(),
-        keeperPath: this.getAnyLeafPath(keeper)
+        keepCount: leavesToKeep.length,
+        removeCount: leavesToRemove.length,
+        removeLeafIds: leavesToRemove.map(l => this.getLeafId(l))
       });
-      this.preferredLeafIds.set(file.path, this.getLeafId(keeper));
-      if (this.getMindmapLeafPath(keeper) !== file.path) {
-        this.logTabDebug("ensure-single:convert-keeper", {
-          file: file.path,
-          keeperId: this.getLeafId(keeper),
-          keeperType: keeper.view.getViewType()
-        });
-        await keeper.setViewState({
-          type: MINDMAP_VIEW_TYPE,
-          active: true,
-          state: { file: file.path }
-        });
+      
+      // Keep the preferred leaf active
+      if (leavesToKeep[0]) {
+        this.preferredLeafIds.set(file.path, this.getLeafId(leavesToKeep[0]));
       }
-      for (const leaf of leaves) {
-        if (leaf === keeper) {
-          continue;
+      
+      // Remove excess leaves
+      for (const leaf of leavesToRemove) {
+        if (!this.isIntentionalSplit(this.getLeafId(leaf))) {
+          this.detachLeaf(leaf);
+        } else {
+          console.warn('[MindmapPlugin] ⚠️ Skipping removal of protected intentional split:', this.getLeafId(leaf));
         }
-        this.logTabDebug("ensure-single:detach-leaf", {
-          file: file.path,
-          leafId: this.getLeafId(leaf),
-          leafType: leaf.view.getViewType(),
-          leafPath: this.getAnyLeafPath(leaf)
-        });
-        this.detachLeaf(leaf);
       }
-      this.app.workspace.revealLeaf(keeper);
-      this.logTabDebug("ensure-single:done", {
-        file: file.path,
-        keeperId: this.getLeafId(keeper)
-      });
+      
+      // Reveal the preferred leaf
+      if (leavesToKeep[0]) {
+        this.app.workspace.revealLeaf(leavesToKeep[0]);
+      }
     } finally {
       this.isApplyingDedupe = false;
     }
@@ -557,20 +596,35 @@ export default class MindmapPlugin extends Plugin {
       });
 
       for (const [path, leaves] of groups) {
-        // Allow up to 2 leaves per file to support split panes
-        if (leaves.length <= 2) {
+        // Filter intentional splits
+        const intentionalLeaves = leaves.filter(leaf => this.isIntentionalSplit(this.getLeafId(leaf)));
+        const nonIntentionalLeaves = leaves.filter(leaf => !this.isIntentionalSplit(this.getLeafId(leaf)));
+        
+        // Allow up to 2 leaves for the same file (split-screen support)
+        // This applies to both intentional splits and regular splits (right-click tab)
+        const maxAllowedLeaves = 2;
+        
+        if (leaves.length <= maxAllowedLeaves) {
           if (leaves[0]) {
             this.preferredLeafIds.set(path, this.getLeafId(leaves[0]));
           }
+          this.logTabDebug("ensure-unique:allow-group", {
+            path,
+            count: leaves.length,
+            intentionalCount: intentionalLeaves.length,
+            maxAllowed: maxAllowedLeaves,
+            reason: "Within allowed limit (split-screen supported)"
+          });
           continue;
         }
         
-        const keeper = this.pickKeeperLeaf(path, leaves);
+        const keeper = this.pickKeeperLeaf(path, [...intentionalLeaves, ...nonIntentionalLeaves]);
         this.logTabDebug("ensure-unique:keeper-picked", {
           path,
           keeperId: this.getLeafId(keeper),
           keeperType: keeper.view.getViewType(),
-          keeperPath: this.getAnyLeafPath(keeper)
+          keeperPath: this.getAnyLeafPath(keeper),
+          isIntentional: this.isIntentionalSplit(this.getLeafId(keeper))
         });
         this.preferredLeafIds.set(path, this.getLeafId(keeper));
         if (this.getMindmapLeafPath(keeper) !== path) {
@@ -587,6 +641,14 @@ export default class MindmapPlugin extends Plugin {
         }
         for (const leaf of leaves) {
           if (leaf === keeper) {
+            continue;
+          }
+          // Never detach intentional splits
+          if (this.isIntentionalSplit(this.getLeafId(leaf))) {
+            this.logTabDebug("ensure-unique:skip-intentional-leaf", {
+              path,
+              leafId: this.getLeafId(leaf)
+            });
             continue;
           }
           this.logTabDebug("ensure-unique:detach-leaf", {
@@ -747,8 +809,23 @@ export default class MindmapPlugin extends Plugin {
   }
 
   private detachLeaf(leaf: WorkspaceLeaf): void {
+    const leafId = this.getLeafId(leaf);
+    const isProtected = this.isIntentionalSplit(leafId);
+    
+    console.log('[MindmapPlugin] 🗑️ DETACHING leaf:', {
+      leafId,
+      leafType: leaf.view.getViewType(),
+      leafPath: this.getAnyLeafPath(leaf),
+      isProtected,
+      protectedIds: Array.from(this.intentionalSplitLeafIds)
+    });
+    
+    if (isProtected) {
+      console.error('[MindmapPlugin] ❌ ERROR: Attempting to detach PROTECTED leaf!', leafId);
+    }
+    
     this.logTabDebug("detach-leaf", {
-      leafId: this.getLeafId(leaf),
+      leafId,
       leafType: leaf.view.getViewType(),
       leafPath: this.getAnyLeafPath(leaf)
     });
