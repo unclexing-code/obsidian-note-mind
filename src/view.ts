@@ -5869,6 +5869,16 @@ export class MindmapView extends ItemView {
         this.openMindmapAssociationModal(nodeId);
       });
     });
+    
+    // Add "Separate" option for PC only
+    if (!this.isMobileLayout && node) {
+      menu.addItem((item) => {
+        item.setTitle("分离").setIcon("scissors").onClick(() => {
+          void this.separateNodeToNewMindmap(nodeId);
+        });
+      });
+    }
+    
     // menu.addItem((item) => {
     //   item.setTitle("添加子节点").setIcon("plus").onClick(() => {
     //     this.createChildNode(nodeId);
@@ -5925,6 +5935,120 @@ export class MindmapView extends ItemView {
     this.updateMobileActionButtons();
     this.requestSave();
     this.renderMindmap();
+  }
+
+  private async separateNodeToNewMindmap(nodeId: string): Promise<void> {
+    if (!this.doc || !this.file) {
+      new Notice("无法分离节点：文档未加载");
+      return;
+    }
+
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      new Notice("节点不存在");
+      return;
+    }
+
+    // Confirm with user
+    const childCount = this.countNodesInSubtree(node);
+    const confirmMessage = childCount > 1
+      ? `确认将节点「${node.title}」及其 ${childCount - 1} 个子节点分离到新导图吗？`
+      : `确认将节点「${node.title}」分离到新导图吗？`;
+    
+    const accepted = window.confirm(confirmMessage);
+    if (!accepted) {
+      return;
+    }
+
+    // Capture history snapshot before modification
+    this.captureHistorySnapshot();
+
+    // Clone the node and its subtree
+    const clonedNode = this.cloneNode(node);
+
+    // Create a new mindmap document with the cloned node as root
+    const newDoc: MindmapDocument = {
+      version: 1,
+      root: clonedNode,
+      selfPath: undefined
+    };
+
+    // Generate new file path in the same folder
+    const folderPath = this.file.parent?.path ?? "";
+    const baseName = `${node.title} - 分离`;
+    const newPath = this.getNextMindmapPath(folderPath, baseName);
+
+    // Create the new mindmap file
+    try {
+      const newFile = await this.app.vault.create(
+        newPath,
+        JSON.stringify(newDoc, null, 2)
+      );
+
+      // Remove the original node from current document
+      const parentLookup = findParentOfNode(this.doc, nodeId);
+      if (parentLookup) {
+        parentLookup.parent.children.splice(parentLookup.index, 1);
+      } else {
+        // If it's the root node, replace it with a link node
+        this.doc.root = {
+          id: crypto.randomUUID(),
+          title: "中心主题",
+          x: node.x,
+          y: node.y,
+          collapsed: false,
+          note: "",
+          children: []
+        };
+      }
+
+      // Create a link node pointing to the new mindmap
+      const linkNode: MindmapNode = {
+        id: crypto.randomUUID(),
+        title: node.title,
+        x: node.x,
+        y: node.y,
+        collapsed: false,
+        note: "",
+        linkTarget: newFile.path,
+        children: []
+      };
+
+      // Insert the link node at the original position
+      if (parentLookup) {
+        parentLookup.parent.children.splice(parentLookup.index, 0, linkNode);
+      } else {
+        // If it was root, add as child of new root
+        this.doc.root.children.push(linkNode);
+      }
+
+      // Select the link node
+      this.setSingleSelectedNode(linkNode.id);
+
+      // Save and render
+      this.normalizeLayoutKeepingNodePosition(linkNode.id);
+      this.requestSave();
+      this.renderMindmap();
+
+      new Notice(`已分离到新导图：${newFile.path}`);
+
+      // Optionally open the new mindmap in a new tab
+      const shouldOpen = window.confirm("是否在新标签页中打开新导图？");
+      if (shouldOpen) {
+        await this.openInternalTarget(newFile.path, true, null);
+      }
+    } catch (error) {
+      new Notice(`分离失败：${String(error)}`);
+      console.error("Failed to separate node:", error);
+    }
+  }
+
+  private countNodesInSubtree(node: MindmapNode): number {
+    let count = 1; // Count the node itself
+    node.children.forEach((child) => {
+      count += this.countNodesInSubtree(child);
+    });
+    return count;
   }
 
   private renameNode(nodeId: string): void {
