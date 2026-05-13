@@ -10,8 +10,8 @@ export default class MindmapPlugin extends Plugin {
   private readonly preferredLeafIds = new Map<string, string>();
   private readonly dedupeTimers = new Set<number>();
   private isApplyingDedupe = false;
-  private readonly intentionalSplitLeafIds = new Set<string>();
   private readonly SPLIT_SCREEN_PROTECTION_DELAY = 5000; // 5 seconds protection after explicit split creation
+  private readonly intentionalSplitLeafIds = new Set<string>(); // Track intentionally created splits
   
   // Method to be called by views when they create intentional splits
   public markSplitCreation(leafId: string): void {

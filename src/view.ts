@@ -142,78 +142,262 @@ class MindmapAssociationModal extends Modal {
   }
 }
 
-class CommentModal extends Modal {
+// Mobile-only custom modal for comments - completely independent from Modal base class
+class CommentModal {
   private textareaEl!: HTMLTextAreaElement;
+  private overlayEl: HTMLElement | null = null;
   
   constructor(
-    app: App,
+    private readonly app: App,
     private readonly selectedText: string,
     private readonly onSubmit: (comment: string) => void
   ) {
-    super(app);
   }
 
-  onOpen(): void {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("mindmap-comment-modal");
+  open(): void {
+    // On mobile, create a completely independent modal
+    if (Platform.isMobile) {
+      this.createMobileModal();
+      return;
+    }
     
-    contentEl.createEl("h2", { text: "添加评论" });
+    // PC version - use Obsidian Modal
+    const modal = new (class extends Modal {
+      private textareaEl!: HTMLTextAreaElement;
+      
+      constructor(app: App, private selectedText: string, private onSubmit: (comment: string) => void) {
+        super(app);
+      }
+      
+      onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass("mindmap-comment-modal");
+        
+        contentEl.createEl("h2", { text: "添加评论" });
+        
+        // Show quoted text
+        if (this.selectedText) {
+          const quoteEl = contentEl.createDiv({ cls: "mindmap-comment-quote-preview" });
+          quoteEl.setText(`"${this.selectedText}"`);
+        }
+        
+        // Textarea for comment input
+        this.textareaEl = contentEl.createEl("textarea", {
+          cls: "mindmap-comment-input",
+          attr: {
+            placeholder: "输入评论内容（支持 Markdown）..."
+          }
+        });
+        
+        // Action buttons
+        const buttonContainer = contentEl.createDiv({ cls: "mindmap-comment-actions" });
+        
+        const cancelBtn = buttonContainer.createEl("button", { text: "取消" });
+        cancelBtn.type = "button";
+        cancelBtn.addEventListener("click", () => {
+          this.close();
+        });
+        
+        const submitBtn = buttonContainer.createEl("button", { text: "提交", cls: "mod-cta" });
+        submitBtn.type = "button";
+        submitBtn.addEventListener("click", () => {
+          const comment = this.textareaEl.value.trim();
+          if (!comment) {
+            new Notice("评论内容不能为空");
+            return;
+          }
+          this.onSubmit(comment);
+          this.close();
+        });
+        
+        // Submit on Ctrl/Cmd + Enter
+        this.textareaEl.addEventListener("keydown", (event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+            event.preventDefault();
+            const comment = this.textareaEl.value.trim();
+            if (!comment) {
+              new Notice("评论内容不能为空");
+              return;
+            }
+            this.onSubmit(comment);
+            this.close();
+          }
+        });
+        
+        window.setTimeout(() => {
+          this.textareaEl.focus();
+        }, 0);
+      }
+      
+      onClose(): void {
+        this.contentEl.empty();
+      }
+    })(this.app, this.selectedText, this.onSubmit);
+    
+    modal.open();
+  }
+
+  private createMobileModal(): void {
+    console.log('[Mobile CommentModal] Creating independent modal');
+    
+    // Create overlay with high z-index - no center alignment to avoid keyboard overlap
+    const overlay = document.createElement("div");
+    overlay.className = "mindmap-comment-modal-overlay";
+    overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;flex-direction:column;pointer-events:auto;";
+    
+    // Create modal container - positioned at top to avoid keyboard
+    const modal = document.createElement("div");
+    modal.className = "mindmap-comment-modal-container";
+    modal.style.cssText = "background:white;border-radius:0 0 12px 12px;padding:24px;width:95vw;max-height:60vh;display:flex;flex-direction:column;pointer-events:auto;z-index:10001;position:relative;overflow:hidden;transform:none !important;-webkit-transform:none !important;writing-mode:horizontal-tb !important;direction:ltr !important;margin-top:5vh;box-shadow:0 4px 20px rgba(0,0,0,0.15);";
+    // Add close button (X) at top-right corner
+    const closeBtn = document.createElement("div");
+    closeBtn.innerHTML = "×";
+    closeBtn.style.cssText = "position:absolute;top:12px;right:12px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:28px;color:#666;cursor:pointer;border-radius:50%;background:rgba(0,0,0,0.05);pointer-events:auto;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);z-index:10002;min-width:44px;min-height:44px;";
+    closeBtn.onclick = function(e) {
+      e?.preventDefault();
+      e?.stopPropagation();
+      console.log('[Mobile CommentModal] Close button clicked via onclick');
+      new Notice('✅ 关闭');
+      overlay.remove();
+    };
+    // Also add event listener as backup
+    closeBtn.addEventListener("click", (e) => {
+      console.log('[Mobile CommentModal] Close button clicked via listener');
+      e.preventDefault();
+      e.stopPropagation();
+      overlay.remove();
+    }, { capture: true });
+    modal.appendChild(closeBtn);
+    
+    // Title
+    const titleEl = document.createElement("h2");
+    titleEl.textContent = "添加评论";
+    titleEl.style.cssText = "margin:0 0 16px 0;font-size:20px;color:#333;pointer-events:auto;padding-right:44px;";
+    modal.appendChild(titleEl);
     
     // Show quoted text
     if (this.selectedText) {
-      const quoteEl = contentEl.createDiv({ cls: "mindmap-comment-quote-preview" });
-      quoteEl.setText(`"${this.selectedText}"`);
+      const quoteEl = document.createElement("div");
+      quoteEl.className = "mindmap-comment-quote-preview";
+      quoteEl.textContent = `"${this.selectedText}"`;
+      quoteEl.style.cssText = "margin-bottom:16px;padding:12px;background:#f5f5f5;border-left:3px solid #7c3aed;border-radius:4px;font-size:14px;color:#666;pointer-events:auto;max-height:100px;overflow-y:auto;-webkit-overflow-scrolling:touch;";
+      modal.appendChild(quoteEl);
     }
     
-    // Textarea for comment input
-    this.textareaEl = contentEl.createEl("textarea", {
-      cls: "mindmap-comment-input",
-      attr: {
-        placeholder: "输入评论内容（支持 Markdown）..."
+    // Textarea for comment input - 16px font to prevent iOS zoom
+    this.textareaEl = document.createElement("textarea");
+    this.textareaEl.id = "mobile-comment-textarea";
+    this.textareaEl.placeholder = "输入评论内容（支持 Markdown）...";
+    this.textareaEl.style.cssText = "width:100%;min-height:150px;padding:12px;font-size:16px;border:1px solid #ddd;border-radius:6px;resize:vertical;margin-bottom:16px;pointer-events:auto;touch-action:manipulation;box-sizing:border-box;-webkit-overflow-scrolling:touch;";
+    this.textareaEl.setAttribute("autofocus", "");
+    
+    // Add focus/blur listeners for debugging
+    this.textareaEl.addEventListener("focus", () => {
+      console.log('[Mobile CommentModal] ✅ Textarea获得焦点');
+    });
+    this.textareaEl.addEventListener("blur", () => {
+      console.log('[Mobile CommentModal] ❌ Textarea失去焦点');
+    });
+    
+    modal.appendChild(this.textareaEl);
+    
+    // Buttons container with sticky positioning at bottom
+    const btnContainer = document.createElement("div");
+    btnContainer.style.cssText = "display:flex;gap:12px;justify-content:flex-end;pointer-events:auto;position:sticky;bottom:0;background:white;padding-top:12px;padding-bottom:env(safe-area-inset-bottom, 20px);border-top:1px solid #eee;margin-top:auto;";
+    
+    const cancelBtn = document.createElement("div");
+    cancelBtn.textContent = "取消";
+    cancelBtn.style.cssText = "padding:12px 24px;font-size:16px;border:1px solid #ddd;border-radius:6px;background:white;cursor:pointer;min-height:44px;min-width:80px;pointer-events:auto;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);text-align:center;display:flex;align-items:center;justify-content:center;user-select:none;";
+    // Use setAttribute for inline onclick - most reliable for mobile
+    cancelBtn.setAttribute('onclick', 'console.log("[Mobile CommentModal] Cancel clicked via inline onclick"); new Notice("✅ 取消按钮被点击"); this.closest(".mindmap-comment-modal-overlay").remove();');
+    
+    const submitBtn = document.createElement("div");
+    submitBtn.textContent = "提交";
+    submitBtn.style.cssText = "padding:12px 24px;font-size:16px;border:none;border-radius:6px;background:#7c3aed;color:white;cursor:pointer;min-height:44px;min-width:80px;pointer-events:auto;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);text-align:center;display:flex;align-items:center;justify-content:center;user-select:none;";
+    // Use setAttribute for inline onclick - most reliable for mobile
+    submitBtn.setAttribute('onclick', '(function(btn) { console.log("[Mobile CommentModal] Submit clicked via inline onclick"); new Notice("🔵 提交按钮被点击"); var textarea = document.getElementById("mobile-comment-textarea"); var comment = textarea ? textarea.value.trim() : ""; if (!comment) { new Notice("❌ 评论内容不能为空"); return; } new Notice("✅ 提交: " + comment); btn.closest(".mindmap-comment-modal-overlay").remove(); })(this);');
+    
+    // Also add event listeners with capture phase as backup
+    cancelBtn.addEventListener("click", (e) => {
+      console.log('[Mobile CommentModal] Cancel clicked via listener');
+      e.preventDefault();
+      e.stopPropagation();
+      overlay.remove();
+    }, { capture: true });
+    
+    submitBtn.addEventListener("click", (e) => {
+      console.log('[Mobile CommentModal] Submit clicked via listener');
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const textarea = document.getElementById('mobile-comment-textarea') as HTMLTextAreaElement;
+      const comment = textarea?.value.trim();
+      
+      if (!comment) {
+        new Notice("❌ 评论内容不能为空");
+        return;
       }
-    });
-    
-    // Action buttons
-    const buttonContainer = contentEl.createDiv({ cls: "mindmap-comment-actions" });
-    
-    const cancelBtn = buttonContainer.createEl("button", { text: "取消" });
-    cancelBtn.type = "button";
-    cancelBtn.addEventListener("click", () => {
-      this.close();
-    });
-    
-    const submitBtn = buttonContainer.createEl("button", { text: "提交", cls: "mod-cta" });
-    submitBtn.type = "button";
-    submitBtn.addEventListener("click", () => {
-      this.submitComment();
-    });
-    
-    // Submit on Ctrl/Cmd + Enter
-    this.textareaEl.addEventListener("keydown", (event) => {
-      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-        event.preventDefault();
-        this.submitComment();
+      
+      try {
+        this.onSubmit(comment);
+      } catch (error) {
+        console.error('[Mobile CommentModal] onSubmit error:', error);
+        new Notice('❌ onSubmit错误: ' + String(error));
       }
-    });
+      
+      overlay.remove();
+    }, { capture: true });
     
-    window.setTimeout(() => {
+    btnContainer.appendChild(cancelBtn);
+    btnContainer.appendChild(submitBtn);
+    modal.appendChild(btnContainer);
+    
+    // Close on background click
+    overlay.onclick = (e) => {
+      if (e.target === overlay) {
+        console.log('[Mobile CommentModal] Background clicked');
+        overlay.remove();
+      }
+    };
+    
+    // Store reference
+    this.overlayEl = overlay;
+    
+    // Add modal to overlay, then add overlay to body
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    
+    // Focus textarea with multiple attempts
+    setTimeout(() => {
       this.textareaEl.focus();
     }, 0);
+    setTimeout(() => {
+      this.textareaEl.focus();
+    }, 100);
+    setTimeout(() => {
+      this.textareaEl.focus();
+    }, 100);
+    setTimeout(() => {
+      this.textareaEl.focus();
+      console.log('[Mobile CommentModal] Attempting to focus textarea (1)');
+    }, 100);
+    
+    setTimeout(() => {
+      if (document.activeElement !== this.textareaEl) {
+        this.textareaEl.focus();
+        console.log('[Mobile CommentModal] Attempting to focus textarea (2)');
+      }
+    }, 300);
+    
+    console.log('[Mobile CommentModal] Modal created successfully');
   }
 
-  onClose(): void {
-    this.contentEl.empty();
-  }
-
-  private submitComment(): void {
-    const comment = this.textareaEl.value.trim();
-    if (!comment) {
-      new Notice("评论内容不能为空");
-      return;
+  close(): void {
+    if (this.overlayEl) {
+      this.overlayEl.remove();
+      this.overlayEl = null;
     }
-    this.onSubmit(comment);
-    this.close();
   }
 }
 
@@ -250,7 +434,9 @@ class TextSelectionModal extends Modal {
       itemEl.dataset.index = idx.toString();
       
       const previewEl = itemEl.createDiv({ cls: "mindmap-text-selection-preview" });
-      previewEl.innerHTML = `...${before}<strong>[${this.selectedText}]</strong>${after}...`;
+      // Escape HTML to prevent XSS and ensure proper rendering
+      const escapeHtml = (unsafe: string) => unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+      previewEl.innerHTML = `...${escapeHtml(before)}<strong>[${escapeHtml(this.selectedText)}]</strong>${escapeHtml(after)}...`;
       
       itemEl.addEventListener("click", () => {
         this.onSelect(idx);
@@ -1241,6 +1427,19 @@ export class MindmapView extends ItemView {
       return;
     }
     const target = event.target;
+    
+    // Skip all processing for comment modal - let it handle its own events
+    if (target instanceof Element && target.closest(".mindmap-comment-modal-overlay, .mindmap-comment-modal-container")) {
+      console.log('[Global Touch] Comment modal detected, skipping touchstart handler');
+      return;
+    }
+    
+    // Skip all processing for text selection modal - let it handle its own events
+    if (target instanceof Element && target.closest(".mindmap-text-selection-modal")) {
+      console.log('[Global Touch] Text selection modal detected, skipping touchstart handler');
+      return;
+    }
+    
     if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
       event.stopPropagation();
       return;
@@ -1262,6 +1461,19 @@ export class MindmapView extends ItemView {
       return;
     }
     const target = event.target;
+    
+    // Skip all processing for comment modal - let it handle its own events
+    if (target instanceof Element && target.closest(".mindmap-comment-modal-overlay, .mindmap-comment-modal-container")) {
+      console.log('[Global Touch] Comment modal detected, skipping touchmove handler');
+      return;
+    }
+    
+    // Skip all processing for text selection modal - let it handle its own events
+    if (target instanceof Element && target.closest(".mindmap-text-selection-modal")) {
+      console.log('[Global Touch] Text selection modal detected, skipping touchmove handler');
+      return;
+    }
+    
     if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
       event.stopPropagation();
       return;
@@ -1283,6 +1495,19 @@ export class MindmapView extends ItemView {
       return;
     }
     const target = event.target;
+    
+    // Skip all processing for comment modal - let it handle its own events
+    if (target instanceof Element && target.closest(".mindmap-comment-modal-overlay, .mindmap-comment-modal-container")) {
+      console.log('[Global Touch] Comment modal detected, skipping touchend handler');
+      return;
+    }
+    
+    // Skip all processing for text selection modal - let it handle its own events
+    if (target instanceof Element && target.closest(".mindmap-text-selection-modal")) {
+      console.log('[Global Touch] Text selection modal detected, skipping touchend handler');
+      return;
+    }
+    
     if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
       event.stopPropagation();
       return;
@@ -2157,6 +2382,43 @@ export class MindmapView extends ItemView {
     }
     this.noteSurfaceEl = this.drawerEl.createDiv({ cls: "mindmap-note-surface" });
     this.noteSelectionToolbarEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-selection-toolbar is-hidden" });
+    
+    [
+      { label: "B", title: "加粗", action: "bold" },
+      { label: "I", title: "斜体", action: "italic" },
+      { label: "S", title: "删除线", action: "strikethrough" },
+      { label: "``", title: "代码", action: "code" },
+      { label: "1", title: "标题 1", action: "header1" },
+      { label: "2", title: "标题 2", action: "header2" },
+      { label: "3", title: "标题 3", action: "header3" },
+      { label: "4", title: "标题 4", action: "header4" },
+      { label: "5", title: "标题 5", action: "header5" },
+      { label: "6", title: "标题 6", action: "header6" },
+      { label: ">", title: "引用", action: "quote" },
+      { label: "UL", title: "无序列表", action: "unordered-list" },
+      { label: "OL", title: "有序列表", action: "ordered-list" },
+      { label: "L", title: "链接", action: "link" },
+      { label: "I", title: "图片", action: "image" },
+      { label: "T", title: "任务列表", action: "task-list" },
+      { label: "H", title: "水平线", action: "horizontal-rule" },
+      { label: "C", title: "代码块", action: "code-block" },
+      { label: "T", title: "表格", action: "table" },
+      { label: "S", title: "分割线", action: "separator" },
+      { label: "U", title: "撤销", action: "undo" },
+      { label: "R", title: "重做", action: "redo" },
+    ].forEach((item) => {
+      const button = this.noteSelectionToolbarEl.createEl("button", {
+        cls: "mindmap-note-selection-toolbar-button",
+        title: item.title,
+      });
+      button.textContent = item.label;
+      button.addEventListener("click", () => {
+        this.noteSelectionToolbarEl.addClass("is-hidden");
+        this.noteSurfaceEl.focus();
+        this.noteSurfaceEl.execCommand(item.action);
+      });
+    });
+
     [
       { label: "B", title: "加粗", action: "bold" },
       { label: "I", title: "斜体", action: "italic" },
@@ -4043,14 +4305,17 @@ export class MindmapView extends ItemView {
       });
     });
     
-    // Highlight commented text in preview mode (delayed to ensure DOM is ready)
-    console.log('[DEBUG] Scheduling highlightCommentedText');
+    // Highlight commented text in preview mode - DISABLED: Using footnote markers instead
+    // The footnote markers are rendered by prepareMarkdownForPreview as mindmap-footnote-marker
+    console.log('[DEBUG] Skipping highlightCommentedText - using footnote markers instead');
+    /*
     window.setTimeout(() => {
       console.log('[DEBUG] Executing highlightCommentedText');
       console.log('[DEBUG] notePreviewEl exists:', !!this.notePreviewEl);
       console.log('[DEBUG] notePreviewEl innerHTML length:', this.notePreviewEl?.innerHTML?.length || 0);
       this.highlightCommentedText();
     }, 100);
+    */
   }
 
   private cancelPendingMarkdownRender(): void {
@@ -4135,27 +4400,44 @@ export class MindmapView extends ItemView {
     });
     
     // For each comment, find and highlight the text using position
+    // Track which positions have been highlighted to handle duplicate texts
+    const highlightedPositions = new Set<number>();
+    
     node.comments.forEach((comment, index) => {
       console.log('[DEBUG] Processing comment', index + 1, ':', comment.text.substring(0, 30));
       console.log('[DEBUG] Comment position:', comment.position, ', length:', comment.length);
       
       // Find the text in the DOM using position-based matching
-      const highlighted = this.findAndHighlightTextByPosition(textNodes, comment.text, comment.position, comment.length, comment.id);
+      const highlighted = this.findAndHighlightTextByPosition(
+        textNodes, 
+        comment.text, 
+        comment.position ?? -1, 
+        comment.length ?? comment.text.length, 
+        comment.id,
+        highlightedPositions
+      );
       console.log('[DEBUG] Comment highlighted:', highlighted);
     });
     
     console.log('[DEBUG] === highlightCommentedText END ===');
   }
   
-  private findAndHighlightTextByPosition(textNodes: Text[], searchText: string, position: number, length: number, commentId: string): boolean {
+  private findAndHighlightTextByPosition(
+    textNodes: Text[], 
+    searchText: string, 
+    position: number, 
+    length: number, 
+    commentId: string,
+    highlightedPositions: Set<number>
+  ): boolean {
     console.log('[DEBUG] === findAndHighlightTextByPosition START ===');
     console.log('[DEBUG] Search text:', searchText.substring(0, 30));
     console.log('[DEBUG] Expected position:', position);
     console.log('[DEBUG] Expected length:', length);
     console.log('[DEBUG] Total text nodes:', textNodes.length);
     
-    if (!searchText || searchText.length === 0 || position < 0) {
-      console.log('[DEBUG] Invalid parameters');
+    if (!searchText || searchText.length === 0) {
+      console.log('[DEBUG] Invalid parameters: empty search text');
       return false;
     }
     
@@ -4163,25 +4445,64 @@ export class MindmapView extends ItemView {
     const fullText = textNodes.map(tn => tn.textContent || '').join('');
     console.log('[DEBUG] Full merged text length:', fullText.length);
     
-    // Verify the text at the expected position matches
-    const actualTextAtPosition = fullText.substring(position, position + length);
-    console.log('[DEBUG] Text at expected position:', actualTextAtPosition.substring(0, 30));
-    console.log('[DEBUG] Match:', actualTextAtPosition === searchText);
+    let targetPosition = position;
     
-    if (actualTextAtPosition !== searchText) {
-      console.log('[DEBUG] WARNING: Text mismatch at position!');
-      console.log('[DEBUG] Expected:', searchText);
-      console.log('[DEBUG] Found:', actualTextAtPosition);
-      // Try to find the text anyway using indexOf as fallback
-      const fallbackIndex = fullText.indexOf(searchText);
-      if (fallbackIndex !== -1) {
-        console.log('[DEBUG] Using fallback index:', fallbackIndex);
-        position = fallbackIndex;
-      } else {
-        console.log('[DEBUG] Text not found anywhere in document');
-        return false;
+    // Verify the text at the expected position matches
+    if (position >= 0 && length > 0 && position + length <= fullText.length) {
+      const actualTextAtPosition = fullText.substring(position, position + length);
+      console.log('[DEBUG] Text at expected position:', actualTextAtPosition.substring(0, 30));
+      console.log('[DEBUG] Match:', actualTextAtPosition === searchText);
+      
+      if (actualTextAtPosition !== searchText) {
+        console.log('[DEBUG] WARNING: Text mismatch at position!');
+        console.log('[DEBUG] Expected:', searchText);
+        console.log('[DEBUG] Found:', actualTextAtPosition);
+        targetPosition = -1; // Mark as invalid, will use fallback
+      } else if (highlightedPositions.has(position)) {
+        console.log('[DEBUG] WARNING: Position already highlighted, need to find next occurrence');
+        targetPosition = -1; // Mark as duplicate, will use fallback
+      }
+    } else {
+      console.log('[DEBUG] Position out of bounds or invalid, using fallback');
+      targetPosition = -1;
+    }
+    
+    // Fallback: find the text using indexOf, but skip already highlighted positions
+    if (targetPosition < 0) {
+      console.log('[DEBUG] Using fallback search strategy');
+      let searchStartIndex = 0;
+      
+      // If we have highlighted positions, start searching after the last one
+      if (highlightedPositions.size > 0) {
+        const maxHighlightedPos = Math.max(...Array.from(highlightedPositions));
+        searchStartIndex = maxHighlightedPos + 1;
+        console.log('[DEBUG] Starting search after position:', searchStartIndex);
+      }
+      
+      // Find all occurrences and pick the first unhighlighted one
+      while (true) {
+        const idx = fullText.indexOf(searchText, searchStartIndex);
+        if (idx === -1) {
+          console.log('[DEBUG] Text not found anywhere in document');
+          return false;
+        }
+        
+        // Check if this position is already highlighted
+        if (!highlightedPositions.has(idx)) {
+          targetPosition = idx;
+          console.log('[DEBUG] Found unhighlighted occurrence at position:', targetPosition);
+          break;
+        }
+        
+        // Move to next occurrence
+        searchStartIndex = idx + 1;
+        console.log('[DEBUG] Position', idx, 'already highlighted, searching next...');
       }
     }
+    
+    // Record this position as highlighted
+    highlightedPositions.add(targetPosition);
+    console.log('[DEBUG] Recorded position', targetPosition, 'as highlighted');
     
     // Find which text node contains this position
     let charCount = 0;
@@ -4191,9 +4512,9 @@ export class MindmapView extends ItemView {
     for (let i = 0; i < textNodes.length; i++) {
       const nodeLength = textNodes[i].textContent?.length || 0;
       
-      if (charCount + nodeLength > position) {
+      if (charCount + nodeLength > targetPosition) {
         targetNodeIndex = i;
-        offsetInNode = position - charCount;
+        offsetInNode = targetPosition - charCount;
         break;
       }
       
@@ -4201,7 +4522,7 @@ export class MindmapView extends ItemView {
     }
     
     if (targetNodeIndex === -1) {
-      console.log('[DEBUG] Could not locate target node at position', position);
+      console.log('[DEBUG] Could not locate target node at position', targetPosition);
       return false;
     }
     
@@ -4212,11 +4533,11 @@ export class MindmapView extends ItemView {
     const content = targetNode.textContent || '';
     
     // Check if the text fits entirely within this node
-    if (offsetInNode + length <= content.length) {
+    if (offsetInNode + searchText.length <= content.length) {
       console.log('[DEBUG] Text fits in single node, creating highlight span');
       
       const beforeText = content.substring(0, offsetInNode);
-      const afterText = content.substring(offsetInNode + length);
+      const afterText = content.substring(offsetInNode + searchText.length);
       
       const fragment = document.createDocumentFragment();
       if (beforeText) {
@@ -4243,7 +4564,7 @@ export class MindmapView extends ItemView {
       }
       
       targetNode.parentNode?.replaceChild(fragment, targetNode);
-      console.log('[DEBUG] Successfully highlighted text at correct position');
+      console.log('[DEBUG] Successfully highlighted text at position', targetPosition);
       console.log('[DEBUG] === findAndHighlightTextByPosition END ===');
       return true;
     } else {
@@ -4459,10 +4780,30 @@ export class MindmapView extends ItemView {
       return;
     }
     
-    const comment = node.comments.find(c => c.footnoteId === footnoteId);
+    // Use prefix matching because Obsidian may add unique suffixes to IDs (e.g., "c3-3411732295364840")
+    const comment = node.comments.find(c => c.footnoteId && footnoteId.startsWith(c.footnoteId));
     if (!comment) {
       console.log('[DEBUG] Comment not found for footnote ID:', footnoteId);
       return;
+    }
+    
+    // First, try to find and highlight the footnote marker in preview
+    // Use prefix matching because Obsidian adds unique suffixes to IDs (e.g., "c2-395730095274bf5e")
+    const footnoteMarker = this.notePreviewEl?.querySelector(`[data-footnote-id^="${footnoteId}"]`);
+    
+    if (footnoteMarker) {
+      console.log('[DEBUG] Found footnote marker with actual ID:', footnoteMarker.getAttribute('data-footnote-id'));
+      
+      // Scroll to the marker
+      footnoteMarker.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      
+      // Add flash animation
+      footnoteMarker.addClass('mindmap-footnote-marker-flash');
+      setTimeout(() => {
+        footnoteMarker.removeClass('mindmap-footnote-marker-flash');
+      }, 300);
+    } else {
+      console.log('[DEBUG] Footnote marker not found in preview');
     }
     
     // Jump to the comment card
@@ -5089,7 +5430,58 @@ export class MindmapView extends ItemView {
         return;
       }
       
-      // Find all occurrences of selectedText in node.note
+      // Step 1: Find all occurrences of selectedText in DOM to determine which one user selected
+      console.log('[DEBUG] Step 1: Finding all occurrences in DOM to determine selection index');
+      
+      const walker = document.createTreeWalker(
+        this.notePreviewEl,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+      
+      let domOccurrenceIndex = -1;
+      let currentDomOccurrence = 0;
+      let currentNode: Node | null = walker.nextNode();
+      
+      while (currentNode) {
+        const textContent = currentNode.textContent || '';
+        let searchPos = 0;
+        
+        // Find all occurrences of selectedText in this text node
+        while (true) {
+          const idx = textContent.indexOf(selectedText, searchPos);
+          if (idx === -1) break;
+          
+          // Check if this occurrence matches the user's selection
+          const range = selection.getRangeAt(0);
+          const selStartContainer = range.startContainer;
+          const selStartOffset = range.startOffset;
+          
+          // Calculate if this occurrence is within the selection
+          if (currentNode === selStartContainer && idx === selStartOffset) {
+            domOccurrenceIndex = currentDomOccurrence;
+            console.log('[DEBUG] Found matching occurrence in DOM at index:', domOccurrenceIndex);
+            break;
+          }
+          
+          currentDomOccurrence++;
+          searchPos = idx + 1;
+        }
+        
+        if (domOccurrenceIndex !== -1) break;
+        currentNode = walker.nextNode();
+      }
+      
+      if (domOccurrenceIndex === -1) {
+        console.log('[DEBUG] Could not determine which occurrence was selected in DOM');
+        this.hideNoteSelectionToolbar();
+        new Notice("无法确定选中的文本位置");
+        return;
+      }
+      
+      console.log('[DEBUG] User selected occurrence number:', domOccurrenceIndex + 1, 'in DOM');
+      
+      // Step 2: Find all occurrences in source code
       const occurrences: number[] = [];
       let searchIndex = 0;
       while (true) {
@@ -5099,7 +5491,7 @@ export class MindmapView extends ItemView {
         searchIndex = idx + 1;
       }
       
-      console.log('[DEBUG] Found', occurrences.length, 'occurrences of selected text at positions:', occurrences);
+      console.log('[DEBUG] Found', occurrences.length, 'occurrences in source at positions:', occurrences);
       
       if (occurrences.length === 0) {
         console.log('[DEBUG] Text not found in node.note');
@@ -5108,11 +5500,33 @@ export class MindmapView extends ItemView {
         return;
       }
       
-      if (occurrences.length === 1) {
-        // Only one occurrence, use it directly
-        selectionStart = occurrences[0];
-        console.log('[DEBUG] Single occurrence found at position:', selectionStart);
-      } else {
+      if (domOccurrenceIndex >= occurrences.length) {
+        console.log('[DEBUG] DOM occurrence index out of bounds');
+        this.hideNoteSelectionToolbar();
+        new Notice("选中文本位置异常");
+        return;
+      }
+      
+      // Use the occurrence at the same index
+      selectionStart = occurrences[domOccurrenceIndex];
+      console.log('[DEBUG] Using source occurrence', domOccurrenceIndex + 1, 'at position:', selectionStart);
+    }
+    
+    // Check if there are multiple occurrences and show selection modal
+    const node = findNodeById(this.doc!, this.selectedNodeId!);
+    if (node && node.note) {
+      const occurrences: number[] = [];
+      let searchIndex = 0;
+      while (true) {
+        const idx = node.note.indexOf(selectedText, searchIndex);
+        if (idx === -1) break;
+        occurrences.push(idx);
+        searchIndex = idx + 1;
+      }
+      
+      console.log('[DEBUG] Total occurrences found:', occurrences.length);
+      
+      if (occurrences.length > 1) {
         // Multiple occurrences - show a modal to let user choose which one
         console.log('[DEBUG] Multiple occurrences detected, showing selection modal');
         
@@ -5132,6 +5546,10 @@ export class MindmapView extends ItemView {
         
         modal.open();
         return; // Exit early, the rest will be handled in the callback
+      } else if (occurrences.length === 1) {
+        // Only one occurrence, use it directly
+        selectionStart = occurrences[0];
+        console.log('[DEBUG] Single occurrence found at position:', selectionStart);
       }
     }
     
@@ -5469,13 +5887,15 @@ export class MindmapView extends ItemView {
       this.editingCommentId = null;
       this.renderCommentsList(node);
       
-      // Update highlights after editing (text content unchanged, but refresh anyway)
+      // Update highlights after editing - DISABLED: Using footnote markers instead
+      /*
       if (!this.noteSurfaceEl?.hasClass("is-editing")) {
         console.log('[DEBUG] Updating highlights after comment edit');
         window.setTimeout(() => {
           this.highlightCommentedText();
         }, 100);
       }
+      */
   }
     }
 
