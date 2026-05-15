@@ -508,11 +508,14 @@ export class MindmapView extends ItemView {
   private noteSurfaceEl!: HTMLDivElement;
   private noteEditorHostEl!: HTMLDivElement;
   private noteSelectionToolbarEl!: HTMLDivElement;
+  private editModeButtonEls: HTMLElement[] = [];
+  private commonButtonEls: HTMLElement[] = [];
   private noteCommentsPanelEl!: HTMLDivElement;
   private editingCommentId: string | null = null; 
   private noteEditorView: EditorView | null = null;
   private isSyncingNoteEditor = false;
   private noteRenderTimer: number | null = null;
+
   private noteRenderRequestId = 0;
   private noteInputEl!: HTMLTextAreaElement;
   private notePreviewEl!: HTMLDivElement;
@@ -2382,58 +2385,49 @@ export class MindmapView extends ItemView {
     }
     this.noteSurfaceEl = this.drawerEl.createDiv({ cls: "mindmap-note-surface" });
     this.noteSelectionToolbarEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-selection-toolbar is-hidden" });
-    
-    [
+    // Create formatting buttons for edit mode only (精简为最常用的8个)
+    const editModeButtons = [
       { label: "B", title: "加粗", action: "bold" },
       { label: "I", title: "斜体", action: "italic" },
       { label: "S", title: "删除线", action: "strikethrough" },
-      { label: "``", title: "代码", action: "code" },
-      { label: "1", title: "标题 1", action: "header1" },
-      { label: "2", title: "标题 2", action: "header2" },
-      { label: "3", title: "标题 3", action: "header3" },
-      { label: "4", title: "标题 4", action: "header4" },
-      { label: "5", title: "标题 5", action: "header5" },
-      { label: "6", title: "标题 6", action: "header6" },
-      { label: ">", title: "引用", action: "quote" },
-      { label: "UL", title: "无序列表", action: "unordered-list" },
-      { label: "OL", title: "有序列表", action: "ordered-list" },
-      { label: "L", title: "链接", action: "link" },
-      { label: "I", title: "图片", action: "image" },
-      { label: "T", title: "任务列表", action: "task-list" },
-      { label: "H", title: "水平线", action: "horizontal-rule" },
-      { label: "C", title: "代码块", action: "code-block" },
-      { label: "T", title: "表格", action: "table" },
-      { label: "S", title: "分割线", action: "separator" },
-      { label: "U", title: "撤销", action: "undo" },
-      { label: "R", title: "重做", action: "redo" },
-    ].forEach((item) => {
+      { label: "🔗", title: "链接", action: "link" },
+      { label: "☐", title: "待办", action: "task-list" },
+      { label: "1.", title: "有序列表", action: "ordered-list" },
+      { label: "•", title: "无序列表", action: "unordered-list" },
+    ];
+    
+    // Create simplified buttons for both modes (comment is always available)
+    const commonButtons = [
+      { label: "💬", title: "添加评论", action: "comment" }
+    ];
+    
+    // Store button references for mode switching
+    this.editModeButtonEls = [];
+    this.commonButtonEls = [];
+    
+    // Add edit mode buttons (hidden by default in preview mode)
+    editModeButtons.forEach((item) => {
       const button = this.noteSelectionToolbarEl.createEl("button", {
         cls: "mindmap-note-selection-toolbar-button",
         title: item.title,
       });
       button.textContent = item.label;
+      button.dataset.action = item.action;
+      button.dataset.mode = "edit";
       button.addEventListener("click", () => {
         this.noteSelectionToolbarEl.addClass("is-hidden");
-        this.noteSurfaceEl.focus();
-        this.noteSurfaceEl.execCommand(item.action);
+        this.applyNoteSelectionFormat(item.action);
       });
+      this.editModeButtonEls.push(button);
     });
 
-    [
-      { label: "B", title: "加粗", action: "bold" },
-      { label: "I", title: "斜体", action: "italic" },
-      { label: "`", title: "行内代码", action: "inline-code" },
-      { label: "代码块", title: "代码块", action: "code-block" },
-      { label: "链接", title: "链接", action: "link" },
-      { label: "💬", title: "添加评论", action: "comment" }
-    ].forEach((buttonConfig) => {
+    // Add common buttons (always visible when toolbar is shown)
+    commonButtons.forEach((buttonConfig) => {
       const buttonEl = this.noteSelectionToolbarEl.createEl("button", { text: buttonConfig.label });
       buttonEl.type = "button";
       buttonEl.title = buttonConfig.title;
-      buttonEl.addEventListener("pointerdown", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      });
+      buttonEl.dataset.action = buttonConfig.action;
+      buttonEl.dataset.mode = "common";
       buttonEl.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -2443,7 +2437,9 @@ export class MindmapView extends ItemView {
           this.applyNoteSelectionFormat(buttonConfig.action);
         } 
       });
+      this.commonButtonEls.push(buttonEl);
     });
+
     this.noteEditorHostEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-editor-host" });
     this.noteInputEl = this.noteSurfaceEl.createEl("textarea", {
       cls: "mindmap-note-input"
@@ -5216,7 +5212,8 @@ export class MindmapView extends ItemView {
     if (this.noteEditorView && !this.isMobileLayout) {
       console.log('[DEBUG] Checking CodeMirror editor mode');
       const selection = this.noteEditorView.state.selection.main;
-      const result = !selection.empty && this.noteEditorView.hasFocus;
+      // Only check if selection is not empty, don't require focus (focus may be lost when clicking toolbar buttons)
+      const result = !selection.empty;
       console.log('[DEBUG] Editor selection result:', result);
       return result;
     }
@@ -5236,18 +5233,15 @@ export class MindmapView extends ItemView {
     // Check if in preview mode - only show comment button
     const isPreviewMode = !this.noteSurfaceEl?.hasClass("is-editing");
     
-    // Show/hide buttons based on mode
-    const buttons = this.noteSelectionToolbarEl.querySelectorAll("button");
-    buttons.forEach((button, index) => {
-      const buttonEl = button as HTMLElement;
-      // Last button (index 5) is the comment button
-      if (isPreviewMode) {
-        // In preview mode, only show comment button
-        buttonEl.style.display = index === 5 ? "" : "none";
-      } else {
-        // In edit mode, show all buttons
-        buttonEl.style.display = "";
-      }
+    // Show/hide buttons based on mode using the stored references
+    // Edit mode buttons: hide in preview mode, show in edit mode
+    this.editModeButtonEls.forEach(buttonEl => {
+      buttonEl.style.display = isPreviewMode ? "none" : "";
+    });
+    
+    // Common buttons (like comment): always show when toolbar is visible
+    this.commonButtonEls.forEach(buttonEl => {
+      buttonEl.style.display = "";
     });
     
     const surfaceRect = this.noteSurfaceEl.getBoundingClientRect();
@@ -5318,6 +5312,21 @@ export class MindmapView extends ItemView {
     if (action === "link") {
       const label = selectedText || "链接文字";
       return { text: `[${label}](url)`, cursorOffset: 1, selectLength: label.length };
+    }
+    if (action === "strikethrough") {
+      return { text: `~~${selectedText || "删除线文字"}~~`, cursorOffset: 2, selectLength: selectedText.length || 6 };
+    }
+    if (action === "task-list") {
+      const text = selectedText || "任务内容";
+      return { text: `- [ ] ${text}`, cursorOffset: 6, selectLength: text.length };
+    }
+    if (action === "unordered-list") {
+      const text = selectedText || "列表项";
+      return { text: `- ${text}`, cursorOffset: 2, selectLength: text.length };
+    }
+    if (action === "ordered-list") {
+      const text = selectedText || "列表项";
+      return { text: `1. ${text}`, cursorOffset: 3, selectLength: text.length };
     }
     return { text: selectedText, cursorOffset: 0, selectLength: selectedText.length };
   }
