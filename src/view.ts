@@ -501,6 +501,7 @@ export class MindmapView extends ItemView {
   private drawerTitleEl!: HTMLHeadingElement;
   private drawerCloseEl!: HTMLButtonElement;
   private noteModeToggleEl!: HTMLButtonElement;
+  private commentsToggleBtn!: HTMLButtonElement;
   private noteToolbarEl!: HTMLDivElement;
   private noteTocEl!: HTMLDivElement;
   private nodeLinkInputEl!: HTMLInputElement;
@@ -2275,6 +2276,23 @@ export class MindmapView extends ItemView {
     // backButtonEl.addEventListener("click", () => {
     //   void this.goBackFromLinkedTarget();
     // });
+
+
+        // Add comments panel toggle button
+    this.commentsToggleBtn = drawerHeaderActionsEl.createEl("button", {
+      cls: "mindmap-comments-toggle-btn-header",
+      text: "💬"
+    });
+    this.commentsToggleBtn.type = "button";
+    this.commentsToggleBtn.title = "打开/关闭评论面板";
+    this.commentsToggleBtn.addEventListener("click", () => {
+      if (this.noteCommentsPanelEl?.hasClass("is-hidden")) {
+        this.showCommentsPanel();
+      } else {
+        this.hideCommentsPanel();
+      }
+    });
+
     this.noteModeToggleEl = drawerHeaderActionsEl.createEl("button", {
       cls: "mindmap-note-mode-toggle",
       text: "编辑"
@@ -2284,6 +2302,9 @@ export class MindmapView extends ItemView {
       const editing = !this.noteSurfaceEl.hasClass("is-editing");
       this.setNoteEditing(editing);
     });
+    
+
+    
     this.drawerCloseEl = drawerHeaderActionsEl.createEl("button", {
       cls: "mindmap-drawer-close",
       text: "关闭"
@@ -2466,6 +2487,29 @@ export class MindmapView extends ItemView {
 
     this.noteTocEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-toc is-empty is-collapsed" });
     this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
+
+    this.noteInputEl.addEventListener("focus", () => {
+        this.noteCommentsPanelEl.classList.add("is-focused");
+    });
+
+    this.noteInputEl.addEventListener("blur", () => {
+        this.noteCommentsPanelEl.classList.remove("is-focused");
+    });
+
+    // Add comments panel toggle button in top-right corner
+    // const commentsToggleBtn = this.noteSurfaceEl.createEl("button", { 
+    //   cls: "mindmap-comments-toggle-btn",
+    //   text: "💬" 
+    // });
+    // commentsToggleBtn.type = "button";
+    // commentsToggleBtn.title = "打开/关闭评论面板";
+    // commentsToggleBtn.addEventListener("click", () => {
+    //   if (this.noteCommentsPanelEl?.hasClass("is-hidden")) {
+    //     this.showCommentsPanel();
+    //   } else {
+    //     this.hideCommentsPanel();
+    //   }
+    // });
 
     this.noteInputEl.addEventListener("focus", () => {
       this.updateMobileActionClusterVisibility();
@@ -4289,16 +4333,20 @@ export class MindmapView extends ItemView {
       }, 10);
     });
     
-    // Add click handler for footnote markers
-    this.notePreviewEl.querySelectorAll("span.mindmap-footnote-marker").forEach((marker) => {
-      marker.addEventListener("click", (e) => {
+    // Use event delegation for footnote markers - attach once to parent element
+    // This ensures clicks are captured even if markers are dynamically added/removed
+    this.notePreviewEl.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      const marker = target.closest('span.mindmap-footnote-marker');
+      
+      if (marker) {
         e.stopPropagation();
         const footnoteId = (marker as HTMLElement).dataset.footnoteId;
         if (footnoteId) {
           console.log('[DEBUG] Footnote marker clicked:', footnoteId);
           this.jumpToCommentByFootnoteId(footnoteId);
         }
-      });
+      }
     });
     
     // Highlight commented text in preview mode - DISABLED: Using footnote markers instead
@@ -5676,6 +5724,12 @@ export class MindmapView extends ItemView {
     
     this.noteCommentsPanelEl.removeClass("is-hidden");
     this.layoutEl?.addClass("has-comments");
+    
+    // Update toggle button state
+    if (this.commentsToggleBtn) {
+      this.commentsToggleBtn.addClass("is-active");
+    }
+    
     this.renderCommentsList(node);
   }
 
@@ -5683,6 +5737,12 @@ export class MindmapView extends ItemView {
     if (this.noteCommentsPanelEl) {
       this.noteCommentsPanelEl.addClass("is-hidden");
       this.layoutEl?.removeClass("has-comments");
+      
+      // Update toggle button state
+      if (this.commentsToggleBtn) {
+        this.commentsToggleBtn.removeClass("is-active");
+      }
+      
       this.editingCommentId = null;
     }
   }

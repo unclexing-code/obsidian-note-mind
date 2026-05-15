@@ -1142,7 +1142,48 @@
    backdrop-filter: blur(14px);
  }
 
- .mindmap-note-toc.is-expanded .mindmap-note-toc-panel {
+ .mindmap-root-view.is-mobile .mindmap-note-toc-panel {
+   width: min(280px, calc(100vw - 38px));
+   max-height: 42vh;
+ }
+
+ /* Comments panel toggle button */
+ .mindmap-comments-toggle-btn {
+   min-width: 42px;
+   height: 38px;
+   padding: 0 10px;
+   border: 1px solid rgba(143, 208, 255, 0.44);
+   border-radius: 999px;
+   background: color-mix(in srgb, var(--background-primary) 84%, rgba(36, 55, 64, 0.92));
+   color: var(--text-normal);
+   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+   font-size: 16px;
+   cursor: pointer;
+   pointer-events: auto;
+   backdrop-filter: blur(12px);
+   transition: all 0.2s ease;
+ }
+
+ .mindmap-comments-toggle-btn:hover,
+ .mindmap-comments-toggle-btn:focus-visible {
+   border-color: rgba(143, 208, 255, 0.78);
+   background: color-mix(in srgb, var(--background-primary) 72%, rgba(143, 208, 255, 0.24));
+   outline: none;
+   transform: scale(1.05);
+ }
+
+ .mindmap-comments-toggle-btn.is-active {
+   border-color: rgba(143, 208, 255, 0.9);
+   background: color-mix(in srgb, var(--interactive-accent) 24%, var(--background-primary));
+   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(143, 208, 255, 0.3) inset;
+ }
+
+ .mindmap-root-view.is-mobile .mindmap-comments-toggle-btn {
+   right: 16px;
+   top: calc(64px + env(safe-area-inset-top, 0px));
+ }
+
+ .mindmap-root-view.is-expanded .mindmap-note-toc-panel {
    display: flex;
    flex-direction: column;
    gap: 7px;
@@ -1676,12 +1717,14 @@
   top: 0;
   bottom: 0;
   width: 320px;
-  background: var(--background-secondary);
+  /* background: var(--background-secondary); */
+  background: #333;
   border-left: 1px solid var(--background-modifier-border);
   display: flex;
   flex-direction: column;
   z-index: 20;
   box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+  opacity: 0.9;
 }
 
 .mindmap-comments-panel.is-hidden {
@@ -1715,7 +1758,7 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--text-muted);
+  color: #ff4757;
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
@@ -1723,8 +1766,8 @@
 }
 
 .mindmap-comments-close:hover {
-  background: var(--background-modifier-hover);
-  color: var(--text-normal);
+  background: rgba(255, 71, 87, 0.1);
+  color: #ff3344;
 }
 
 .mindmap-comments-list {
@@ -1999,10 +2042,38 @@
   color: white;
 }
 
+/* Comments panel toggle button in header */
+.mindmap-comments-toggle-btn-header {
+  min-width: 36px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-normal);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-right: 6px;
+}
+
+.mindmap-comments-toggle-btn-header:hover,
+.mindmap-comments-toggle-btn-header:focus-visible {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+  outline: none;
+}
+
+.mindmap-comments-toggle-btn-header.is-active {
+  background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+  border-color: var(--interactive-accent);
+  color: var(--interactive-accent);
+}
+
 /* Comment text highlight in preview mode */
 .mindmap-comment-highlight {
-  background: lightyellow;
-  border-bottom: 2px solid lightyellow;
+  background: red;
+  border-bottom: 2px solid red;
   padding: 1px 3px;
   border-radius: 3px;
   transition: all 0.2s ease;
@@ -2057,13 +2128,16 @@
   display: inline-block;
   /* padding: 2px 6px; */
   /* margin: 0 2px; */
-  background: lightyellow;
+  /* background: red; */
   /* border-radius: 4px; */
   line-height: 1.2;
   cursor: pointer;
   transition: all 0.2s ease;
   /* box-shadow: 0 1px 3px rgba(243, 156, 18, 0.2); */
   user-select: none;
+  /* border-radius: 4px; */
+  border-bottom: 2px dotted red;
+
 }
 
 .mindmap-footnote-marker:hover {
