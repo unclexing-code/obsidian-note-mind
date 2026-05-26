@@ -718,7 +718,7 @@ export class MindmapView extends ItemView {
   }
 
   private isDirectLinkOpenGesture(event: MouseEvent | PointerEvent): boolean {
-    return (event.metaKey || event.ctrlKey) && event.altKey;
+    return (event.metaKey || event.ctrlKey);
   }
 
   private cloneDocument(doc: MindmapDocument): MindmapDocument {
