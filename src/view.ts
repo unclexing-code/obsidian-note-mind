@@ -7517,6 +7517,18 @@ export class MindmapView extends ItemView {
     input.addEventListener("pointerdown", (event) => event.stopPropagation());
     input.addEventListener("click", (event) => event.stopPropagation());
 
+    // Track IME composition state to prevent duplicate characters
+    let isComposing = false;
+
+    // Handle IME composition events
+    input.addEventListener("compositionstart", () => {
+      isComposing = true;
+    });
+
+    input.addEventListener("compositionend", () => {
+      isComposing = false;
+    });
+
     const restoreMindmapKeyboardFocus = (): void => {
       this.activateMindmapLeaf();
       this.focusContainerWithoutScroll();
@@ -7560,7 +7572,12 @@ export class MindmapView extends ItemView {
     };
 
     input.addEventListener("keydown", (event) => {
+      // During IME composition, don't process Enter key immediately
       if (event.key === "Enter") {
+        if (isComposing) {
+          // Let IME handle the Enter key for candidate selection
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         commit();
@@ -7571,6 +7588,18 @@ export class MindmapView extends ItemView {
         cancel();
       }
     });
+    
+    // Add input event listener to handle text changes
+    input.addEventListener("input", (event) => {
+      // During composition, let the browser handle input naturally
+      // Don't interfere with IME input processing
+      if (isComposing) {
+        return;
+      }
+      // For non-composition input, no special handling needed
+      // The value will be committed on blur or Enter
+    });
+    
     input.addEventListener("blur", () => {
       commit();
     });
