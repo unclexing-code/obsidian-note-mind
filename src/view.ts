@@ -6475,6 +6475,73 @@ export class MindmapView extends ItemView {
     this.renderMindmap();
   }
 
+  private async internalizeChildren(nodeId: string): Promise<void> {
+    if (!this.doc) {
+      return;
+    }
+    
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return;
+    }
+    
+    // 检查是否有子节点
+    if (!node.children || node.children.length === 0) {
+      new Notice("该节点没有子节点，无需内化");
+      return;
+    }
+    
+    // 捕获历史快照以便撤销
+    this.captureHistorySnapshot();
+    
+    // 将子节点转换为 Markdown 格式
+    let childMarkdownContent = "\n\n## 内化内容\n\n"; // 添加分隔标题
+    
+    const convertNodeToMarkdown = (node: MindmapNode, depth: number = 0): string => {
+      const indent = "  ".repeat(depth); // 使用两个空格缩进
+      let markdown = `${indent}- **${node.title}**\n`;
+      
+      // 添加节点笔记（如果有）
+      if (node.note && node.note.trim()) {
+        const noteLines = node.note.trim().split('\n');
+        noteLines.forEach(noteLine => {
+          if (noteLine.trim()) {
+            markdown += `${indent}  ${noteLine}\n`;
+          }
+        });
+      }
+      
+      // 递归处理子节点
+      if (node.children && node.children.length > 0) {
+        node.children.forEach(child => {
+          markdown += convertNodeToMarkdown(child, depth + 1);
+        });
+      }
+      
+      return markdown;
+    };
+    
+    // 遍历所有子节点并转换为 Markdown
+    node.children.forEach(child => {
+      childMarkdownContent += convertNodeToMarkdown(child);
+    });
+    
+    // 将 Markdown 内容追加到当前节点的笔记中
+    if (!node.note) {
+      node.note = "";
+    }
+    node.note += childMarkdownContent;
+    
+    // 删除所有子节点
+    node.children = [];
+    
+    // 更新界面
+    this.requestSave();
+    this.renderMindmap();
+    
+    new Notice(`已内化 ${node.children.length} 个子节点到笔记中`);
+  }
+
   private openNodeMenu(event: MouseEvent, nodeId: string): void {
     const node = this.doc ? findNodeById(this.doc, nodeId) : null;
     const linkTarget = node?.linkTarget?.trim() ?? "";
@@ -6490,6 +6557,15 @@ export class MindmapView extends ItemView {
         this.openMindmapAssociationModal(nodeId);
       });
     });
+    
+    // Add "Internalize" option to convert children to markdown content
+    if (node && node.children && node.children.length > 0) {
+      menu.addItem((item) => {
+        item.setTitle("内化").setIcon("file-output").onClick(() => {
+          void this.internalizeChildren(nodeId);
+        });
+      });
+    }
     
     // Add "Separate" option for PC only
     if (!this.isMobileLayout && node) {
