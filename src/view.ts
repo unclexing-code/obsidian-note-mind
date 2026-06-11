@@ -542,6 +542,8 @@ export class MindmapView extends ItemView {
   private static readonly MAX_ZOOM_SCALE = 3;
   private static readonly MOBILE_NODE_TOOLTIP_REOPEN_DELAY = 420;
   private static readonly MOBILE_NODE_DRAG_LONG_PRESS_DELAY = 300;
+  private static readonly AI_NODE_APPEAR_MS = 560;
+  private static readonly AI_NODE_STAGGER_MS = 480;
   private file: TFile | null = null;
   private doc: MindmapDocument | null = null;
   private layoutEl!: HTMLDivElement;
@@ -637,6 +639,10 @@ export class MindmapView extends ItemView {
   private lastMobileCanvasTap: { x: number; y: number; time: number } | null = null;
   private mobileTooltipNodeId: string | null = null;
   private dragGhostPositions = new Map<string, { x: number; y: number }>();
+  private aiGeneratingNodeId: string | null = null;
+  private aiAppearingNodes = new Map<string, number>();
+  private aiChildCreationToken = 0;
+  private aiAppearAnimationFrame: number | null = null;
   private readonly onKeydown = (event: KeyboardEvent): void => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
       if (this.shouldIgnoreMindmapShortcuts(event)) {
@@ -2633,6 +2639,7 @@ export class MindmapView extends ItemView {
     this.svgEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     this.svgEl.classList.add("mindmap-svg");
     this.graphLayerEl = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    this.ensureAiGeneratingDefs();
     this.svgEl.appendChild(this.graphLayerEl);
     this.canvasEl.addEventListener("pointerdown", this.onCanvasPointerDown);
     this.canvasEl.addEventListener("wheel", this.onWheelPan, { passive: false });
@@ -2866,6 +2873,176 @@ export class MindmapView extends ItemView {
     );
   }
 
+  private ensureAiGeneratingDefs(): void {
+    if (this.svgEl.querySelector("#mindmap-ai-gradient")) {
+      return;
+    }
+
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    const gradient = document.createElementNS("http://www.w3.org/2000/svg", "linearGradient");
+    gradient.setAttribute("id", "mindmap-ai-gradient");
+    gradient.setAttribute("x1", "0%");
+    gradient.setAttribute("y1", "0%");
+    gradient.setAttribute("x2", "100%");
+    gradient.setAttribute("y2", "100%");
+    [
+      ["0%", "#c4b5fd"],
+      ["35%", "#60a5fa"],
+      ["70%", "#34d399"],
+      ["100%", "#f472b6"]
+    ].forEach(([offset, color]) => {
+      const stop = document.createElementNS("http://www.w3.org/2000/svg", "stop");
+      stop.setAttribute("offset", offset);
+      stop.setAttribute("stop-color", color);
+      gradient.appendChild(stop);
+    });
+    defs.appendChild(gradient);
+    this.svgEl.appendChild(defs);
+  }
+
+  private setAiGeneratingNode(nodeId: string | null): void {
+    this.aiGeneratingNodeId = nodeId;
+    this.renderMindmap();
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
+  private pruneFinishedAiAppearingNodes(): void {
+    const now = Date.now();
+    for (const [nodeId, startedAt] of this.aiAppearingNodes.entries()) {
+      if (now - startedAt >= MindmapView.AI_NODE_APPEAR_MS) {
+        this.aiAppearingNodes.delete(nodeId);
+      }
+    }
+  }
+
+  private scheduleAiAppearAnimationFrame(): void {
+    if (this.aiAppearAnimationFrame !== null) {
+      return;
+    }
+    const tick = (): void => {
+      this.pruneFinishedAiAppearingNodes();
+      if (this.aiAppearingNodes.size === 0) {
+        this.aiAppearAnimationFrame = null;
+        return;
+      }
+      this.renderMindmap();
+      this.aiAppearAnimationFrame = window.requestAnimationFrame(tick);
+    };
+    this.aiAppearAnimationFrame = window.requestAnimationFrame(tick);
+  }
+
+  private stopAiAppearAnimationFrame(): void {
+    if (this.aiAppearAnimationFrame !== null) {
+      window.cancelAnimationFrame(this.aiAppearAnimationFrame);
+      this.aiAppearAnimationFrame = null;
+    }
+  }
+
+  private applyAiAppearingEdgeStyles(path: SVGPathElement, childId: string): void {
+    const appearedAt = this.aiAppearingNodes.get(childId);
+    if (!appearedAt) {
+      return;
+    }
+
+    const elapsed = Date.now() - appearedAt;
+    const progress = Math.min(1, elapsed / MindmapView.AI_NODE_APPEAR_MS);
+    if (progress >= 1) {
+      return;
+    }
+
+    const eased = 1 - Math.pow(1 - progress, 2);
+    const length = path.getTotalLength();
+    path.classList.add("is-ai-appearing-edge");
+    path.style.strokeDasharray = String(length);
+    path.style.strokeDashoffset = String(length * (1 - eased));
+    path.style.opacity = String(0.35 + 0.65 * eased);
+  }
+
+  private applyAiAppearingNodeStyles(
+    group: SVGGElement,
+    rect: SVGRectElement,
+    titleBox: SVGForeignObjectElement,
+    nodeId: string
+  ): void {
+    const appearedAt = this.aiAppearingNodes.get(nodeId);
+    if (!appearedAt) {
+      return;
+    }
+
+    const elapsed = Date.now() - appearedAt;
+    const progress = Math.min(1, elapsed / MindmapView.AI_NODE_APPEAR_MS);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const scale = 0.5 + 0.5 * eased;
+    const opacity = Math.min(1, progress * 1.2);
+    const titleOpacity = Math.min(1, Math.max(0, (progress - 0.18) / 0.82));
+
+    group.classList.add("is-ai-appearing");
+    rect.classList.add("is-ai-appearing");
+    rect.style.opacity = String(opacity);
+    rect.style.transform = `scale(${scale})`;
+    rect.style.transformBox = "fill-box";
+    rect.style.transformOrigin = "center";
+    rect.style.filter = `drop-shadow(0 0 ${10 + 14 * (1 - progress)}px rgba(167, 139, 250, ${0.85 * (1 - progress * 0.7)})) drop-shadow(0 0 ${6 + 10 * (1 - progress)}px rgba(96, 165, 250, ${0.55 * (1 - progress * 0.7)}))`;
+
+    titleBox.style.opacity = String(titleOpacity);
+  }
+
+  private appendAiGeneratingEffects(
+    group: SVGGElement,
+    width: number,
+    height: number,
+    isRootNode: boolean
+  ): void {
+    const pad = 12;
+    const cornerRadius = isRootNode ? 18 : 14;
+    const ringWidth = width + pad * 2;
+    const ringHeight = height + pad * 2;
+    const effectsGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    effectsGroup.classList.add("mindmap-ai-effects");
+
+    const glow = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    glow.setAttribute("x", String(-ringWidth / 2));
+    glow.setAttribute("y", String(-ringHeight / 2));
+    glow.setAttribute("width", String(ringWidth));
+    glow.setAttribute("height", String(ringHeight));
+    glow.setAttribute("rx", String(cornerRadius));
+    glow.setAttribute("ry", String(cornerRadius));
+    glow.classList.add("mindmap-ai-glow");
+    effectsGroup.appendChild(glow);
+
+    const ring = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    ring.setAttribute("x", String(-ringWidth / 2));
+    ring.setAttribute("y", String(-ringHeight / 2));
+    ring.setAttribute("width", String(ringWidth));
+    ring.setAttribute("height", String(ringHeight));
+    ring.setAttribute("rx", String(cornerRadius));
+    ring.setAttribute("ry", String(cornerRadius));
+    ring.classList.add("mindmap-ai-orbit-ring");
+    effectsGroup.appendChild(ring);
+
+    [
+      { x: -width / 2 - 8, y: -height / 2 - 8, delay: "0s" },
+      { x: width / 2 + 8, y: -height / 2 - 6, delay: "0.3s" },
+      { x: width / 2 + 6, y: height / 2 + 8, delay: "0.6s" },
+      { x: -width / 2 - 6, y: height / 2 + 6, delay: "0.9s" }
+    ].forEach(({ x, y, delay }) => {
+      const sparkle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      sparkle.setAttribute("cx", String(x));
+      sparkle.setAttribute("cy", String(y));
+      sparkle.setAttribute("r", "3.2");
+      sparkle.classList.add("mindmap-ai-sparkle");
+      sparkle.style.animationDelay = delay;
+      effectsGroup.appendChild(sparkle);
+    });
+
+    group.insertBefore(effectsGroup, group.firstChild);
+  }
+
   private updateMarqueeOverlay(): void {
     if (!this.marqueeEl) {
       return;
@@ -2945,6 +3122,7 @@ export class MindmapView extends ItemView {
           directPath.classList.add("is-dragging");
         }
         this.graphLayerEl.appendChild(directPath);
+        this.applyAiAppearingEdgeStyles(directPath, child.id);
         drawOrthogonalConnectors(child);
         return;
       }
@@ -2992,6 +3170,7 @@ export class MindmapView extends ItemView {
           childPath.classList.add("is-dragging");
         }
         this.graphLayerEl.appendChild(childPath);
+        this.applyAiAppearingEdgeStyles(childPath, child.id);
         drawOrthogonalConnectors(child);
       });
     };
@@ -3054,6 +3233,10 @@ export class MindmapView extends ItemView {
       const size = this.ensureNodeSize(node);
 
       const isRootNode = this.doc !== null && node.id === this.doc.root.id;
+      const isAiGenerating = this.aiGeneratingNodeId === node.id;
+      if (isAiGenerating) {
+        group.classList.add("is-ai-generating");
+      }
       const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       rect.setAttribute("x", String(-size.width / 2));
       rect.setAttribute("y", String(-size.height / 2));
@@ -3073,6 +3256,10 @@ export class MindmapView extends ItemView {
       if (isNodeSelected) {
         rect.classList.add("is-selected");
       }
+      if (isAiGenerating) {
+        rect.classList.add("is-ai-generating");
+        this.appendAiGeneratingEffects(group, size.width, size.height, isRootNode);
+      }
       group.appendChild(rect);
 
       const titleHasLink = !!node.linkTarget?.trim();
@@ -3090,13 +3277,19 @@ export class MindmapView extends ItemView {
       if (isRootNode) {
         text.classList.add("is-root");
       }
+      if (isAiGenerating) {
+        text.classList.add("is-ai-generating");
+      }
       text.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
-      text.textContent = node.title;
+      text.textContent = isAiGenerating ? `${node.title} ✨` : node.title;
       if (this.editingNodeId === node.id) {
         titleBox.style.display = "none";
       }
       titleBox.appendChild(text);
       group.appendChild(titleBox);
+      if (this.aiAppearingNodes.has(node.id)) {
+        this.applyAiAppearingNodeStyles(group, rect, titleBox, node.id);
+      }
 
       if (this.editingNodeId === node.id) {
         this.appendInlineTitleEditor(group, node, size.width, size.height);
@@ -6480,21 +6673,27 @@ export class MindmapView extends ItemView {
     this.renderMindmap();
   }
 
-  private createChildNodesFromTitles(parentId: string, titles: string[]): void {
+  private async createChildNodesFromTitlesAnimated(parentId: string, titles: string[]): Promise<void> {
     if (!this.doc || titles.length === 0) {
       return;
     }
+
     const parent = findNodeById(this.doc, parentId);
     if (!parent) {
       return;
     }
 
+    const token = this.aiChildCreationToken;
     const anchorNodeId = parent.id;
     this.closeDrawer();
     this.captureHistorySnapshot();
 
     const createdIds: string[] = [];
     for (const title of titles) {
+      if (!this.doc || token !== this.aiChildCreationToken) {
+        return;
+      }
+
       const child = addChildNode(this.doc, parentId, {
         x: parent.x + 180,
         y: parent.y + (parent.children.length + 1) * 56
@@ -6502,18 +6701,26 @@ export class MindmapView extends ItemView {
       if (!child) {
         continue;
       }
+
       child.title = title;
       createdIds.push(child.id);
+      this.aiAppearingNodes.set(child.id, Date.now());
+      this.setSingleSelectedNode(child.id);
+      this.playNodeActionSound("add");
+      this.normalizeLayoutKeepingNodePosition(anchorNodeId);
+      this.requestSave();
+      this.scheduleAiAppearAnimationFrame();
+      this.renderMindmap();
+
+      await this.delay(MindmapView.AI_NODE_STAGGER_MS);
     }
 
-    if (createdIds.length === 0) {
+    if (createdIds.length === 0 || token !== this.aiChildCreationToken) {
       return;
     }
 
     this.captureHistorySnapshot();
     this.setSingleSelectedNode(createdIds[createdIds.length - 1]);
-    this.playNodeActionSound("add");
-    this.normalizeLayoutKeepingNodePosition(anchorNodeId);
     this.requestSave();
     this.renderMindmap();
   }
@@ -6569,7 +6776,10 @@ export class MindmapView extends ItemView {
     const settings = plugin.settings;
     const minCount = Math.max(1, settings.minChildCount);
     const maxCount = Math.max(minCount, settings.maxChildCount);
-    const notice = new Notice("正在生成子节点...", 0);
+    this.aiChildCreationToken += 1;
+    this.aiAppearingNodes.clear();
+    this.stopAiAppearAnimationFrame();
+    this.setAiGeneratingNode(nodeId);
 
     try {
       const titles = await generateChildNodeTitles(settings, {
@@ -6593,12 +6803,13 @@ export class MindmapView extends ItemView {
         return;
       }
 
-      this.createChildNodesFromTitles(nodeId, filteredTitles);
+      this.setAiGeneratingNode(null);
+      await this.createChildNodesFromTitlesAnimated(nodeId, filteredTitles);
       new Notice(`已生成 ${filteredTitles.length} 个子节点`);
     } catch (error) {
       new Notice(`生成子节点失败：${String(error)}`);
     } finally {
-      notice.hide();
+      this.setAiGeneratingNode(null);
     }
   }
 

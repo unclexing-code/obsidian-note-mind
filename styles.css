@@ -756,6 +756,21 @@
    filter: drop-shadow(0 0 6px rgba(143, 208, 255, 0.55));
  }
 
+ .mindmap-edge.is-ai-appearing-edge {
+   stroke: #c4b5fd;
+   stroke-width: 2.4;
+   filter: drop-shadow(0 0 8px rgba(167, 139, 250, 0.75));
+ }
+
+ .mindmap-node-group.is-ai-appearing {
+   pointer-events: none;
+ }
+
+ .mindmap-node.is-ai-appearing {
+   stroke: #c4b5fd;
+   stroke-width: 2.6;
+ }
+
  .mindmap-node.is-drag-ghost {
    fill: rgba(143, 208, 255, 0.08);
    stroke: rgba(207, 234, 255, 0.7);
@@ -808,6 +823,110 @@
  .mindmap-node.is-drop-target {
    stroke-width: 2.6;
    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.95)) drop-shadow(0 0 18px rgba(255, 255, 255, 0.45));
+ }
+
+ .mindmap-node-group.is-ai-generating {
+   pointer-events: none;
+ }
+
+ .mindmap-node.is-ai-generating {
+   fill: rgba(167, 139, 250, 0.12);
+   stroke: url(#mindmap-ai-gradient);
+   stroke-width: 2.8;
+   animation: mindmap-ai-node-pulse 1.4s ease-in-out infinite;
+   filter:
+     drop-shadow(0 0 10px rgba(167, 139, 250, 0.95))
+     drop-shadow(0 0 22px rgba(96, 165, 250, 0.65))
+     drop-shadow(0 0 34px rgba(52, 211, 153, 0.35));
+ }
+
+ .mindmap-node.is-root.is-ai-generating {
+   fill: rgba(255, 244, 184, 0.24);
+ }
+
+ .mindmap-ai-glow {
+   fill: rgba(167, 139, 250, 0.14);
+   stroke: none;
+   animation: mindmap-ai-glow-pulse 1.6s ease-in-out infinite;
+ }
+
+ .mindmap-ai-orbit-ring {
+   fill: none;
+   stroke: url(#mindmap-ai-gradient);
+   stroke-width: 2.4;
+   stroke-linecap: round;
+   stroke-dasharray: 16 20;
+   animation: mindmap-ai-orbit-spin 1.8s linear infinite;
+ }
+
+ .mindmap-ai-sparkle {
+   fill: #e9d5ff;
+   filter: drop-shadow(0 0 4px rgba(196, 181, 253, 0.95));
+   animation: mindmap-ai-sparkle 1.2s ease-in-out infinite;
+   transform-box: fill-box;
+   transform-origin: center;
+ }
+
+ .mindmap-node-title.is-ai-generating {
+   background: linear-gradient(
+     100deg,
+     #ffffff 0%,
+     #c4b5fd 28%,
+     #67e8f9 52%,
+     #86efac 76%,
+     #ffffff 100%
+   );
+   background-size: 220% 100%;
+   -webkit-background-clip: text;
+   background-clip: text;
+   color: transparent;
+   animation: mindmap-ai-text-shimmer 1.8s linear infinite;
+ }
+
+ @keyframes mindmap-ai-node-pulse {
+   0%, 100% {
+     stroke-width: 2.4;
+     opacity: 0.92;
+   }
+   50% {
+     stroke-width: 3.6;
+     opacity: 1;
+   }
+ }
+
+ @keyframes mindmap-ai-glow-pulse {
+   0%, 100% {
+     opacity: 0.4;
+   }
+   50% {
+     opacity: 0.95;
+   }
+ }
+
+ @keyframes mindmap-ai-orbit-spin {
+   to {
+     stroke-dashoffset: -72;
+   }
+ }
+
+ @keyframes mindmap-ai-sparkle {
+   0%, 100% {
+     opacity: 0.25;
+     transform: scale(0.55);
+   }
+   50% {
+     opacity: 1;
+     transform: scale(1.25);
+   }
+ }
+
+ @keyframes mindmap-ai-text-shimmer {
+   0% {
+     background-position: 120% 0;
+   }
+   100% {
+     background-position: -120% 0;
+   }
  }
 
  .mindmap-node-title {
