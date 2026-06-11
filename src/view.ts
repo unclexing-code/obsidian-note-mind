@@ -5,7 +5,9 @@ import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { markdown } from "@codemirror/lang-markdown";
 import { searchKeymap } from "@codemirror/search";
 import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, TFile, TFolder, normalizePath, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { generateChildNodeTitles, serializeMindmapContext } from "./llm";
 import { addChildNode, findNodeById, findParentOfNode, normalizeMindmapDocument, removeNode, reorderNodeWithinParent, reparentNode, visibleNodes, walkNodes } from "./store";
+import { getMindmapPlugin, llmProviderRequiresApiKey } from "./settings";
 import { createDefaultMindmap, type MindmapDocument, type MindmapNode, type MindmapComment } from "./types";
 
 type MindmapClipboardPayload = {
@@ -139,6 +141,74 @@ class MindmapAssociationModal extends Modal {
     } finally {
       this.createButtonEl.disabled = false;
     }
+  }
+}
+
+class MindmapAiGenerateModal extends Modal {
+  private inputEl!: HTMLTextAreaElement;
+
+  constructor(
+    app: App,
+    private readonly nodeTitle: string,
+    private readonly onSubmit: (userPrompt: string) => void
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("mindmap-ai-generate-modal");
+
+    contentEl.createEl("h2", { text: "AI 生成子节点" });
+
+    const contextEl = contentEl.createDiv({ cls: "mindmap-ai-generate-context" });
+    contextEl.createEl("span", { cls: "mindmap-ai-generate-context-label", text: "目标节点：" });
+    contextEl.createEl("strong", { text: this.nodeTitle.trim() || "未命名节点" });
+
+    contentEl.createEl("label", {
+      cls: "mindmap-ai-generate-label",
+      text: "生成要求"
+    });
+    this.inputEl = contentEl.createEl("textarea", {
+      cls: "mindmap-ai-generate-input",
+      attr: {
+        placeholder: "描述你希望生成的子节点，例如：列出 3 个具体实施步骤、补充相关知识点、展开下一步行动计划..."
+      }
+    });
+
+    const hintEl = contentEl.createDiv({ cls: "mindmap-ai-generate-hint" });
+    hintEl.setText("AI 会结合整张导图的上下文与你的描述来生成更准确的子节点。");
+
+    const buttonContainer = contentEl.createDiv({ cls: "mindmap-ai-generate-actions" });
+    const cancelBtn = buttonContainer.createEl("button", { text: "取消" });
+    cancelBtn.type = "button";
+    cancelBtn.addEventListener("click", () => {
+      this.close();
+    });
+
+    const submitBtn = buttonContainer.createEl("button", { text: "生成", cls: "mod-cta" });
+    submitBtn.type = "button";
+    submitBtn.addEventListener("click", () => {
+      const userPrompt = this.inputEl.value.trim();
+      if (!userPrompt) {
+        new Notice("请先填写生成要求");
+        return;
+      }
+      this.onSubmit(userPrompt);
+      this.close();
+    });
+
+    this.inputEl.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        submitBtn.click();
+      }
+    });
+
+    window.setTimeout(() => {
+      this.inputEl.focus();
+    }, 0);
   }
 }
 
@@ -6410,6 +6480,128 @@ export class MindmapView extends ItemView {
     this.renderMindmap();
   }
 
+  private createChildNodesFromTitles(parentId: string, titles: string[]): void {
+    if (!this.doc || titles.length === 0) {
+      return;
+    }
+    const parent = findNodeById(this.doc, parentId);
+    if (!parent) {
+      return;
+    }
+
+    const anchorNodeId = parent.id;
+    this.closeDrawer();
+    this.captureHistorySnapshot();
+
+    const createdIds: string[] = [];
+    for (const title of titles) {
+      const child = addChildNode(this.doc, parentId, {
+        x: parent.x + 180,
+        y: parent.y + (parent.children.length + 1) * 56
+      });
+      if (!child) {
+        continue;
+      }
+      child.title = title;
+      createdIds.push(child.id);
+    }
+
+    if (createdIds.length === 0) {
+      return;
+    }
+
+    this.captureHistorySnapshot();
+    this.setSingleSelectedNode(createdIds[createdIds.length - 1]);
+    this.playNodeActionSound("add");
+    this.normalizeLayoutKeepingNodePosition(anchorNodeId);
+    this.requestSave();
+    this.renderMindmap();
+  }
+
+  private openAiGenerateChildNodesModal(nodeId: string): void {
+    if (!this.doc) {
+      return;
+    }
+
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return;
+    }
+
+    const plugin = getMindmapPlugin(this.app);
+    if (!plugin) {
+      new Notice("无法读取插件设置");
+      return;
+    }
+
+    const settings = plugin.settings;
+    if (llmProviderRequiresApiKey(settings.llmProvider) && !settings.apiKey.trim()) {
+      new Notice("请先在插件设置中填写 API Key");
+      return;
+    }
+    if (settings.llmProvider === "ollama" && !settings.ollamaModel.trim()) {
+      new Notice("请先在插件设置中选择 Ollama 模型");
+      return;
+    }
+
+    const modal = new MindmapAiGenerateModal(this.app, node.title, (userPrompt) => {
+      void this.executeAiGenerateChildNodes(nodeId, userPrompt);
+    });
+    modal.open();
+  }
+
+  private async executeAiGenerateChildNodes(nodeId: string, userPrompt: string): Promise<void> {
+    if (!this.doc) {
+      return;
+    }
+
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return;
+    }
+
+    const plugin = getMindmapPlugin(this.app);
+    if (!plugin) {
+      new Notice("无法读取插件设置");
+      return;
+    }
+
+    const settings = plugin.settings;
+    const minCount = Math.max(1, settings.minChildCount);
+    const maxCount = Math.max(minCount, settings.maxChildCount);
+    const notice = new Notice("正在生成子节点...", 0);
+
+    try {
+      const titles = await generateChildNodeTitles(settings, {
+        parentTitle: node.title,
+        parentNote: node.note,
+        existingChildren: node.children.map((child) => child.title),
+        userPrompt,
+        mindmapContext: serializeMindmapContext(this.doc, nodeId),
+        minCount,
+        maxCount
+      });
+
+      const filteredTitles = titles.filter((title) => {
+        const normalized = title.trim().toLowerCase();
+        return normalized.length > 0
+          && !node.children.some((child) => child.title.trim().toLowerCase() === normalized);
+      });
+
+      if (filteredTitles.length === 0) {
+        new Notice("未生成可用的新子节点");
+        return;
+      }
+
+      this.createChildNodesFromTitles(nodeId, filteredTitles);
+      new Notice(`已生成 ${filteredTitles.length} 个子节点`);
+    } catch (error) {
+      new Notice(`生成子节点失败：${String(error)}`);
+    } finally {
+      notice.hide();
+    }
+  }
+
   private createSiblingNode(nodeId: string): void {
     if (!this.doc) {
       return;
@@ -6557,7 +6749,12 @@ export class MindmapView extends ItemView {
         this.openMindmapAssociationModal(nodeId);
       });
     });
-    
+    menu.addItem((item) => {
+      item.setTitle("AI 生成子节点").setIcon("sparkles").onClick(() => {
+        this.openAiGenerateChildNodesModal(nodeId);
+      });
+    });
+
     // Add "Internalize" option to convert children to markdown content
     if (node && node.children && node.children.length > 0) {
       menu.addItem((item) => {

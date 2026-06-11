@@ -1,4 +1,6 @@
 import { Notice, Plugin, TFile, TFolder, normalizePath, type WorkspaceLeaf } from "obsidian";
+import { DEFAULT_SETTINGS, type MindmapPluginSettings } from "./src/settings";
+import { MindmapSettingTab } from "./src/settings-tab";
 import { createDefaultMindmap, type MindmapDocument, type MindmapNode } from "./src/types";
 import { MINDMAP_VIEW_TYPE, MindmapView } from "./src/view";
 
@@ -7,6 +9,7 @@ const LEGACY_MINDMAP_EXTENSION = "mindmap.json";
 const DEBUG_TAB_DEDUPE = true;
 
 export default class MindmapPlugin extends Plugin {
+  settings: MindmapPluginSettings = { ...DEFAULT_SETTINGS };
   private readonly preferredLeafIds = new Map<string, string>();
   private readonly dedupeTimers = new Set<number>();
   private isApplyingDedupe = false;
@@ -36,6 +39,8 @@ export default class MindmapPlugin extends Plugin {
   }
 
   async onload(): Promise<void> {
+    await this.loadSettings();
+    this.addSettingTab(new MindmapSettingTab(this.app, this));
     this.registerView(MINDMAP_VIEW_TYPE, (leaf) => new MindmapView(leaf));
     this.registerExtensions([PRIMARY_MINDMAP_EXTENSION, LEGACY_MINDMAP_EXTENSION], MINDMAP_VIEW_TYPE);
     this.logTabDebug("plugin-onload");
@@ -143,6 +148,18 @@ export default class MindmapPlugin extends Plugin {
         return true;
       }
     });
+  }
+
+  async loadSettings(): Promise<void> {
+    const loaded = await this.loadData() as Partial<MindmapPluginSettings> | null;
+    this.settings = { ...DEFAULT_SETTINGS, ...loaded };
+    if (this.settings.minChildCount > this.settings.maxChildCount) {
+      this.settings.maxChildCount = this.settings.minChildCount;
+    }
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
   }
 
   async onunload(): Promise<void> {

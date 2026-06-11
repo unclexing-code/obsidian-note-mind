@@ -1975,6 +1975,74 @@
   margin-right: 320px;
 }
 
+/* AI Generate Child Nodes Modal */
+.mindmap-ai-generate-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal:has(.mindmap-ai-generate-modal) {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.mindmap-ai-generate-modal h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.25;
+}
+
+.mindmap-ai-generate-context {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--interactive-accent) 8%, transparent);
+  color: var(--text-normal);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mindmap-ai-generate-context-label {
+  color: var(--text-muted);
+}
+
+.mindmap-ai-generate-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.mindmap-ai-generate-input {
+  width: 100%;
+  min-height: 140px;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.mindmap-ai-generate-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px rgba(var(--interactive-accent-rgb), 0.15);
+}
+
+.mindmap-ai-generate-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.mindmap-ai-generate-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Comment Modal Styles */
 .mindmap-comment-modal {
   max-width: 500px;

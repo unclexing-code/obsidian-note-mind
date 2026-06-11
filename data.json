@@ -1,0 +1,12 @@
+{
+  "llmProvider": "ollama",
+  "apiKey": "sk-330f22cedb234cb080b19c376229f761",
+  "deepseekModel": "deepseek-chat",
+  "openaiModel": "gpt-4o-mini",
+  "ollamaBaseUrl": "http://127.0.0.1:11434",
+  "ollamaModel": "qwen2.5:14b",
+  "customBaseUrl": "",
+  "customModel": "",
+  "minChildCount": 1,
+  "maxChildCount": 10
+}
