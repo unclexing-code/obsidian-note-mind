@@ -41,7 +41,7 @@ class MindmapGlobalSearchModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("mindmap-global-search-modal");
-    contentEl.createEl("h2", { text: "全局搜索导图" });
+    // contentEl.createEl("h2", { text: "全局搜索导图" });
 
     this.inputEl = contentEl.createEl("input", {
       cls: "mindmap-global-search-input",
@@ -151,13 +151,13 @@ export default class MindmapPlugin extends Plugin {
   private lastSplitCreationTime = 0;
   private readonly SPLIT_SCREEN_PROTECTION_DELAY = 5000; // 5 seconds protection after explicit split creation
   private readonly intentionalSplitLeafIds = new Set<string>(); // Track intentionally created splits
-  
+
   // Method to be called by views when they create intentional splits
   public markSplitCreation(leafId: string): void {
     this.intentionalSplitLeafIds.add(leafId);
     console.log('[MindmapPlugin] ✅ Marked intentional split:', leafId, 'Total protected:', this.intentionalSplitLeafIds.size);
     this.logTabDebug("mark-split-creation", { leafId, totalProtected: this.intentionalSplitLeafIds.size });
-    
+
     // Clean up after protection delay
     window.setTimeout(() => {
       this.intentionalSplitLeafIds.delete(leafId);
@@ -165,7 +165,7 @@ export default class MindmapPlugin extends Plugin {
       this.logTabDebug("clear-split-protection", { leafId });
     }, this.SPLIT_SCREEN_PROTECTION_DELAY);
   }
-  
+
   private isIntentionalSplit(leafId: string): boolean {
     const result = this.intentionalSplitLeafIds.has(leafId);
     if (result) {
@@ -664,7 +664,7 @@ export default class MindmapPlugin extends Plugin {
     const existingLeaf = this.findLeafByFilePath(file.path) ?? this.findMindmapLeafByPath(file.path);
     // Only reuse existing leaf if it exists; otherwise create a new split
     const leaf = existingLeaf ?? this.app.workspace.getLeaf(true);
-    
+
     // If we're creating a new split (not reusing), mark the protection timestamp
     if (!existingLeaf) {
       this.lastSplitCreationTime = Date.now();
@@ -673,7 +673,7 @@ export default class MindmapPlugin extends Plugin {
         targetLeafId: this.getLeafId(leaf)
       });
     }
-    
+
     this.logTabDebug("open-mindmap-file", {
       file: file.path,
       existingLeafId: existingLeaf ? this.getLeafId(existingLeaf) : null,
@@ -734,11 +734,11 @@ export default class MindmapPlugin extends Plugin {
     this.isApplyingDedupe = true;
     try {
       const leaves = this.getAllLeavesByFilePath(file.path);
-      
+
       // Filter out intentional splits from deduplication consideration
       const nonIntentionalLeaves = leaves.filter(leaf => !this.isIntentionalSplit(this.getLeafId(leaf)));
       const intentionalLeaves = leaves.filter(leaf => this.isIntentionalSplit(this.getLeafId(leaf)));
-      
+
       this.logTabDebug("ensure-single:start", {
         debugWanted: "PLEASE_COPY_LEAVES_JSON",
         file: file.path,
@@ -748,17 +748,17 @@ export default class MindmapPlugin extends Plugin {
         intentionalLeafIds: intentionalLeaves.map(l => this.getLeafId(l)),
         leavesJson: JSON.stringify(leaves.map((leaf) => this.snapshotLeaf(leaf)))
       });
-      
+
       // Allow up to 2 leaves for the same file (split-screen support)
       // This applies to both intentional splits and regular splits (right-click tab)
       const maxAllowedLeaves = 2;
-      
+
       if (leaves.length <= maxAllowedLeaves) {
         if (leaves[0]) {
           this.preferredLeafIds.set(file.path, this.getLeafId(leaves[0]));
         }
-        this.logTabDebug("ensure-single:allow-leaves", { 
-          file: file.path, 
+        this.logTabDebug("ensure-single:allow-leaves", {
+          file: file.path,
           count: leaves.length,
           maxAllowed: maxAllowedLeaves,
           reason: "Within allowed limit (split-screen supported)"
@@ -769,19 +769,19 @@ export default class MindmapPlugin extends Plugin {
       // Close excess leaves beyond the allowed limit
       const leavesToKeep = leaves.slice(0, maxAllowedLeaves);
       const leavesToRemove = leaves.slice(maxAllowedLeaves);
-      
+
       this.logTabDebug("ensure-single:excess-leaves", {
         file: file.path,
         keepCount: leavesToKeep.length,
         removeCount: leavesToRemove.length,
         removeLeafIds: leavesToRemove.map(l => this.getLeafId(l))
       });
-      
+
       // Keep the preferred leaf active
       if (leavesToKeep[0]) {
         this.preferredLeafIds.set(file.path, this.getLeafId(leavesToKeep[0]));
       }
-      
+
       // Remove excess leaves
       for (const leaf of leavesToRemove) {
         if (!this.isIntentionalSplit(this.getLeafId(leaf))) {
@@ -790,7 +790,7 @@ export default class MindmapPlugin extends Plugin {
           console.warn('[MindmapPlugin] ⚠️ Skipping removal of protected intentional split:', this.getLeafId(leaf));
         }
       }
-      
+
       // Reveal the preferred leaf
       if (leavesToKeep[0]) {
         this.app.workspace.revealLeaf(leavesToKeep[0]);
@@ -855,11 +855,11 @@ export default class MindmapPlugin extends Plugin {
         // Filter intentional splits
         const intentionalLeaves = leaves.filter(leaf => this.isIntentionalSplit(this.getLeafId(leaf)));
         const nonIntentionalLeaves = leaves.filter(leaf => !this.isIntentionalSplit(this.getLeafId(leaf)));
-        
+
         // Allow up to 2 leaves for the same file (split-screen support)
         // This applies to both intentional splits and regular splits (right-click tab)
         const maxAllowedLeaves = 2;
-        
+
         if (leaves.length <= maxAllowedLeaves) {
           if (leaves[0]) {
             this.preferredLeafIds.set(path, this.getLeafId(leaves[0]));
@@ -873,7 +873,7 @@ export default class MindmapPlugin extends Plugin {
           });
           continue;
         }
-        
+
         const keeper = this.pickKeeperLeaf(path, [...intentionalLeaves, ...nonIntentionalLeaves]);
         this.logTabDebug("ensure-unique:keeper-picked", {
           path,
@@ -1067,7 +1067,7 @@ export default class MindmapPlugin extends Plugin {
   private detachLeaf(leaf: WorkspaceLeaf): void {
     const leafId = this.getLeafId(leaf);
     const isProtected = this.isIntentionalSplit(leafId);
-    
+
     console.log('[MindmapPlugin] 🗑️ DETACHING leaf:', {
       leafId,
       leafType: leaf.view.getViewType(),
@@ -1075,11 +1075,11 @@ export default class MindmapPlugin extends Plugin {
       isProtected,
       protectedIds: Array.from(this.intentionalSplitLeafIds)
     });
-    
+
     if (isProtected) {
       console.error('[MindmapPlugin] ❌ ERROR: Attempting to detach PROTECTED leaf!', leafId);
     }
-    
+
     this.logTabDebug("detach-leaf", {
       leafId,
       leafType: leaf.view.getViewType(),

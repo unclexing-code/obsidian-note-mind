@@ -89,6 +89,7 @@
    padding: 8px;
    z-index: 25;
    pointer-events: auto;
+   display: none;
  }
 
  .mindmap-root-view:not(.is-mobile) .mindmap-desktop-search-button,

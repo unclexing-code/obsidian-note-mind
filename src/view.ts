@@ -7708,7 +7708,7 @@ export class MindmapView extends ItemView {
     }
   }
 
-  private createNodeFromMarkdownHeading(title: string, note: string): MindmapNode {
+  private createNodeFromMarkdownHeading(title: string, note = ""): MindmapNode {
     return {
       id: crypto.randomUUID(),
       title: title.trim() || "未命名节点",
@@ -7728,61 +7728,74 @@ export class MindmapView extends ItemView {
   }
 
   private markdownToMindmapDocument(markdownText: string): MindmapDocument | null {
-    const sections: Array<{ level: number; title: string; lines: string[] }> = [];
-    let current: { level: number; title: string; lines: string[] } | null = null;
+    const rootTitle = this.file?.basename || "导图";
+    const root = this.createNodeFromMarkdownHeading(rootTitle);
+    const stack: Array<{ level: number; node: MindmapNode }> = [{ level: 0, node: root }];
+    let currentHeadingLevel = 0;
+    let currentContextLevel = 0;
     let inFence = false;
-    const preamble: string[] = [];
+    let createdNodeCount = 0;
 
-    markdownText.split(/\r?\n/).forEach((line) => {
-      if (/^\s*(```|~~~)/.test(line)) {
-        inFence = !inFence;
-      }
-      const headingMatch = !inFence ? /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line.trim()) : null;
-      if (headingMatch) {
-        current = {
-          level: headingMatch[1].length,
-          title: this.stripMarkdownTitleMarkup(headingMatch[2]),
-          lines: []
-        };
-        sections.push(current);
+    const appendNode = (level: number, rawTitle: string, updateContext = true): void => {
+      const title = this.stripMarkdownTitleMarkup(rawTitle).trim();
+      if (!title) {
         return;
       }
-      if (current) {
-        current.lines.push(line);
-      } else {
-        preamble.push(line);
-      }
-    });
-
-    if (sections.length === 0) {
-      return null;
-    }
-
-    const firstSection = sections[0];
-    
-    // Create an implicit root node to hold all top-level headings as siblings
-    // Use file basename if available, otherwise use first heading title or generic name
-    const rootTitle = this.file?.basename || (sections.length === 1 ? firstSection.title : "导图");
-    const rootNote = preamble.join("\n").trim();
-    const root = this.createNodeFromMarkdownHeading(rootTitle, rootNote);
-    
-    // Process all sections (including the first one) as children of root
-    const stack: Array<{ level: number; node: MindmapNode }> = [{ level: 0, node: root }];
-
-    sections.forEach((section) => {
-      const node = this.createNodeFromMarkdownHeading(section.title, section.lines.join("\n"));
-      
-      // Pop from stack while current level is less than or equal to stack top level
-      // This ensures equal-level headings become siblings
-      while (stack.length > 1 && stack[stack.length - 1].level >= section.level) {
+      while (stack.length > 1 && stack[stack.length - 1].level >= level) {
         stack.pop();
       }
-      
-      // Add as child of current stack top
       const parent = stack[stack.length - 1].node;
+      const node = this.createNodeFromMarkdownHeading(title);
       parent.children.push(node);
-      stack.push({ level: section.level, node });
+      stack.push({ level, node });
+      if (updateContext) {
+        currentContextLevel = level;
+      }
+      createdNodeCount += 1;
+    };
+
+    markdownText.split(/\r?\n/).forEach((line) => {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) {
+        return;
+      }
+
+      const fenceMatch = /^\s*(```|~~~)\s*(.*)$/.exec(line);
+      if (fenceMatch) {
+        inFence = !inFence;
+        const fenceTitle = fenceMatch[2]?.trim() ? `代码块：${fenceMatch[2].trim()}` : "代码块";
+        appendNode(Math.max(currentContextLevel + 1, currentHeadingLevel + 1, 1), fenceTitle);
+        return;
+      }
+
+      if (!inFence) {
+        const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(trimmedLine);
+        if (headingMatch) {
+          const headingLevel = headingMatch[1].length;
+          appendNode(headingLevel, headingMatch[2]);
+          currentHeadingLevel = headingLevel;
+          currentContextLevel = headingLevel;
+          return;
+        }
+
+        const listMatch = /^(\s*)(?:[-*+]\s+|\d+[.)]\s+|- \[[ xX]\]\s+)(.+)$/.exec(line);
+        if (listMatch) {
+          const indentColumns = listMatch[1].replace(/\t/g, "    ").length;
+          const indentLevel = Math.floor(indentColumns / 2);
+          const listLevel = Math.max(1, currentHeadingLevel + indentLevel + 1);
+          appendNode(listLevel, listMatch[2]);
+          return;
+        }
+      }
+
+      const blockquoteMatch = /^>+\s*(.+)$/.exec(trimmedLine);
+      const contentTitle = blockquoteMatch ? blockquoteMatch[1] : trimmedLine;
+      appendNode(Math.max(currentContextLevel + 1, currentHeadingLevel + 1, 1), contentTitle, false);
     });
+
+    if (createdNodeCount === 0) {
+      return null;
+    }
 
     return {
       version: 1,
@@ -7807,18 +7820,22 @@ export class MindmapView extends ItemView {
     if (!doc) {
       return false;
     }
-    let headingCount = 0;
+    let structuralLineCount = 0;
     let inFence = false;
     markdownText.split(/\r?\n/).forEach((line) => {
       if (/^\s*(```|~~~)/.test(line)) {
         inFence = !inFence;
         return;
       }
-      if (!inFence && /^(#{1,6})\s+/.test(line.trim())) {
-        headingCount += 1;
+      if (inFence) {
+        return;
+      }
+      const trimmedLine = line.trim();
+      if (/^(#{1,6})\s+/.test(trimmedLine) || /^\s*(?:[-*+]\s+|\d+[.)]\s+|- \[[ xX]\]\s+)/.test(line)) {
+        structuralLineCount += 1;
       }
     });
-    return headingCount >= 2 || this.isDefaultStarterMindmap();
+    return structuralLineCount > 0 || this.isDefaultStarterMindmap();
   }
 
   private appendMarkdownDocumentToNode(targetNodeId: string, markdownDoc: MindmapDocument): boolean {
