@@ -640,24 +640,16 @@ export default class MindmapPlugin extends Plugin {
   }
 
   private scheduleMindmapTabDedupe(file?: TFile): void {
-    const delays = [30, 120, 360]; // Removed 0ms delay to avoid race conditions with new splits
-    this.logTabDebug("schedule-dedupe", { file: file?.path, delays });
-    for (const delay of delays) {
-      const timer = window.setTimeout(() => {
-        this.dedupeTimers.delete(timer);
-        if (this.isApplyingDedupe) {
-          this.logTabDebug("skip-dedupe-while-applying", { file: file?.path, delay });
-          return;
-        }
-        this.logTabDebug("run-dedupe-timer", { file: file?.path, delay });
-        if (file) {
-          void this.ensureSingleMindmapTab(file);
-          return;
-        }
-        void this.ensureUniqueMindmapTabs();
-      }, delay);
-      this.dedupeTimers.add(timer);
-    }
+    this.logTabDebug("schedule-dedupe", { file: file?.path, mode: "orphan-cleanup-only" });
+    const timer = window.setTimeout(() => {
+      this.dedupeTimers.delete(timer);
+      if (this.isApplyingDedupe) {
+        this.logTabDebug("skip-dedupe-while-applying", { file: file?.path });
+        return;
+      }
+      void this.cleanupOrphanMindmapTabs();
+    }, 120);
+    this.dedupeTimers.add(timer);
   }
 
   private async openMindmapFile(file: TFile): Promise<WorkspaceLeaf> {
@@ -724,6 +716,23 @@ export default class MindmapPlugin extends Plugin {
     }
     this.logTabDebug("find-leaf-by-file-path:miss", { path });
     return undefined;
+  }
+
+  private async cleanupOrphanMindmapTabs(): Promise<void> {
+    if (this.isApplyingDedupe) {
+      return;
+    }
+    this.isApplyingDedupe = true;
+    try {
+      const orphanMindmapLeaves = this.getAllWorkspaceLeaves().filter((leaf) => {
+        return leaf.view.getViewType() === MINDMAP_VIEW_TYPE && !this.getAnyLeafPath(leaf);
+      });
+      for (const leaf of orphanMindmapLeaves) {
+        this.detachLeaf(leaf);
+      }
+    } finally {
+      this.isApplyingDedupe = false;
+    }
   }
 
   private async ensureSingleMindmapTab(file: TFile): Promise<void> {

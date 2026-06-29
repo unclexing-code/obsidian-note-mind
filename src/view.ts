@@ -2920,53 +2920,6 @@ export class MindmapView extends ItemView {
     }
     this.pendingFocusLinkedFromPath = nextState.focusLinkedFrom ? normalizePath(nextState.focusLinkedFrom) : null;
 
-    // Check for duplicate leaf - but allow split-screen (up to 2 leaves for same file)
-    const allLeaves = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE);
-    const duplicateLeaves = allLeaves.filter((leaf) => {
-      if (leaf === this.leaf) {
-        return false;
-      }
-      const view = leaf.view;
-      if (!(view instanceof MindmapView)) {
-        return false;
-      }
-      return view.getState().file === path;
-    });
-    
-    console.log('[MindmapView] 🔍 Checking for duplicates:', {
-      currentLeafId: (this.leaf as any).id,
-      path,
-      totalLeaves: allLeaves.length,
-      duplicateLeavesCount: duplicateLeaves.length,
-      duplicateLeafIds: duplicateLeaves.map(l => (l as any).id)
-    });
-    
-    // Only allow up to 2 leaves for the same file (split-screen support)
-    // If there are already 2 or more duplicates, close this new one
-    if (duplicateLeaves.length >= 2) {
-      console.log('[MindmapView] ⚠️ Too many duplicates (>2), closing current leaf');
-      const duplicateView = duplicateLeaves[0].view;
-      if (duplicateView instanceof MindmapView && this.pendingFocusLinkedFromPath) {
-        duplicateView.focusLinkedNodeFromPath(this.pendingFocusLinkedFromPath);
-      }
-      this.pendingFocusLinkedFromPath = null;
-      this.app.workspace.revealLeaf(duplicateLeaves[0]);
-      await this.leaf.setViewState({ type: "empty" });
-      return;
-    } else if (duplicateLeaves.length === 1) {
-      console.log('[MindmapView] ✅ One duplicate found - allowing split-screen (2 total)');
-      // Allow split-screen - don't close the new leaf
-      // Just focus the linked node if needed
-      if (this.pendingFocusLinkedFromPath) {
-        const existingView = duplicateLeaves[0].view;
-        if (existingView instanceof MindmapView) {
-          existingView.focusLinkedNodeFromPath(this.pendingFocusLinkedFromPath);
-        }
-      }
-      this.pendingFocusLinkedFromPath = null;
-      // Don't reveal or close - let both leaves coexist
-    }
-
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
       console.error('[MindmapView] ❌ File not found:', path);
@@ -6739,41 +6692,14 @@ export class MindmapView extends ItemView {
     
     if (isMindmap) {
       const normalizedFocusLinkedFromPath = focusLinkedFromPath ? normalizePath(focusLinkedFromPath) : null;
-      
-      // When opening in new tab, always create a fresh leaf without checking existing ones
-      // This ensures split-screen functionality works properly
-      let targetLeaf: WorkspaceLeaf;
-      if (inNewTab) {
-        console.log('[MindmapView] ➕ Creating NEW split pane...');
-        // Force creation of a new split pane
-        targetLeaf = this.app.workspace.getLeaf(true);
-        console.log('[MindmapView] ✅ New leaf created with ID:', (targetLeaf as any).id);
-        
-        // CRITICAL: Mark this as an intentional split IMMEDIATELY before any other operations
-        // This must happen before setViewState to prevent race conditions with deduplication
-        const leafId = (targetLeaf as any).id;
-        console.log('[MindmapView] 🏷️ Marking leaf as intentional split:', leafId);
-        this.markIntentionalSplit(targetLeaf);
-        
-        // Add a small delay to ensure the mark is registered before setViewState triggers layout events
-        console.log('[MindmapView] ⏱️ Waiting 50ms for protection to register...');
-        await new Promise(resolve => setTimeout(resolve, 50));
-        console.log('[MindmapView] ⏱️ Delay complete, proceeding with setViewState');
-      } else {
-        console.log('[MindmapView] 🔄 Looking for existing leaf...');
-        // Only reuse existing leaf when NOT opening in new tab
-        const existingLeaf = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).find((leaf) => {
-          const view = leaf.view;
-          if (!(view instanceof MindmapView)) {
-            return false;
-          }
-          return view.getState().file === target.path;
-        });
-        targetLeaf = existingLeaf ?? this.leaf;
-        console.log('[MindmapView] 📌 Using existing/current leaf:', (targetLeaf as any).id);
-      }
-      
-      console.log('[MindmapView] 🎨 Setting view state on leaf:', (targetLeaf as any).id, 'for file:', target.path);
+      const existingLeaves = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).filter((leaf) => {
+        const view = leaf.view;
+        return view instanceof MindmapView && view.getState().file === target.path;
+      });
+      const activeLeaf = this.app.workspace.getMostRecentLeaf();
+      const existingLeaf = existingLeaves.find((leaf) => leaf === activeLeaf) ?? existingLeaves[0] ?? null;
+      const targetLeaf = existingLeaf ?? (inNewTab ? this.app.workspace.getLeaf(true) : this.leaf);
+
       await targetLeaf.setViewState({
         type: MINDMAP_VIEW_TYPE,
         active: true,
@@ -6782,31 +6708,9 @@ export class MindmapView extends ItemView {
           focusLinkedFrom: normalizedFocusLinkedFromPath ?? undefined
         }
       });
-      console.log('[MindmapView] ✅ View state set successfully');
-      
-      // Verify the view state was set correctly
-      const viewState = targetLeaf.getViewState();
-      console.log('[MindmapView] 🔍 Verifying view state:', {
-        leafId: (targetLeaf as any).id,
-        viewType: viewState.type,
-        fileInState: viewState.state?.file,
-        expectedFile: target.path
-      });
-      
-      if (viewState.state?.file !== target.path) {
-        console.error('[MindmapView] ❌ ERROR: View state file mismatch!', {
-          expected: target.path,
-          actual: viewState.state?.file
-        });
-      }
-      
-      console.log('[MindmapView] 👁️ Revealing leaf:', (targetLeaf as any).id);
       this.app.workspace.revealLeaf(targetLeaf);
-      console.log('[MindmapView] ✅ Leaf revealed');
-      
-      // If we opened in the current leaf, update local state
+
       if (targetLeaf === this.leaf) {
-        console.log('[MindmapView] 📝 Opened in CURRENT leaf, updating local state');
         this.file = target;
         this.pendingFocusLinkedFromPath = normalizedFocusLinkedFromPath;
         await this.loadFromFile();
@@ -6817,31 +6721,13 @@ export class MindmapView extends ItemView {
         this.focusLinkedNodeFromPendingPath();
         this.renderMindmap();
       } else if (targetLeaf.view instanceof MindmapView) {
-        // If we opened in a different leaf, trigger focus on that view
-        console.log('[MindmapView] 🎉 SUCCESS! Opened in DIFFERENT leaf:', (targetLeaf as any).id);
-        
-        // CRITICAL: Force the new view to load the file
-        console.log('[MindmapView] 🔄 Forcing new view to load file:', target.path);
-        const newView = targetLeaf.view as MindmapView;
-        newView.file = target;
-        await newView.loadFromFile();
-        console.log('[MindmapView] ✅ File loaded in new view');
-        
-        console.log('[MindmapView] 📊 Current workspace leaves:', 
-          this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).map(l => ({
-            id: (l as any).id,
-            file: l.view instanceof MindmapView ? l.view.getState().file : 'unknown'
-          }))
-        );
-        
+        const targetView = targetLeaf.view as MindmapView;
         if (Platform.isMobile) {
-          newView.setZenMode(true);
+          targetView.setZenMode(true);
         }
         if (normalizedFocusLinkedFromPath) {
-          newView.focusLinkedNodeFromPath(normalizedFocusLinkedFromPath);
+          targetView.focusLinkedNodeFromPath(normalizedFocusLinkedFromPath);
         }
-      } else {
-        console.warn('[MindmapView] ⚠️ Unexpected: targetLeaf.view is not MindmapView, type:', targetLeaf.view.getViewType());
       }
       return;
     }
