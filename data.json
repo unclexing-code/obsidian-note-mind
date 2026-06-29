@@ -1,12 +1,12 @@
 {
-  "llmProvider": "deepseek",
-  "apiKey": "sk-330f22cedb234cb080b19c376229f761",
+  "llmProvider": "custom",
+  "apiKey": "ark-81f52212-4892-4b9f-8412-a4a8bd25a189-5d3d0",
   "deepseekModel": "deepseek-chat",
   "openaiModel": "gpt-4o-mini",
   "ollamaBaseUrl": "http://127.0.0.1:11434",
   "ollamaModel": "llava:7b",
-  "customBaseUrl": "",
-  "customModel": "",
+  "customBaseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+  "customModel": "doubao-seed-2-0-lite-260428",
   "minChildCount": 1,
   "maxChildCount": 10
 }

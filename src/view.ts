@@ -24,6 +24,12 @@ type MindmapLinkCandidate = {
   obsidianUrl: string;
 };
 
+type ObsidianAppWithPlugins = {
+  plugins?: {
+    plugins?: Record<string, unknown>;
+  };
+};
+
 const PRIMARY_MINDMAP_EXTENSION = "mindmap";
 const LEGACY_MINDMAP_EXTENSION = "mindmap.json";
 const ASSOCIATED_MINDMAP_FOLDER_PATH = "思维导图";
@@ -146,11 +152,16 @@ class MindmapAssociationModal extends Modal {
 
 class MindmapAiGenerateModal extends Modal {
   private inputEl!: HTMLTextAreaElement;
+  private previewEl!: HTMLDivElement;
+  private generateBtn!: HTMLButtonElement;
+  private confirmBtn!: HTMLButtonElement;
+  private previewItems: Array<{ checkbox: HTMLInputElement; input: HTMLInputElement }> = [];
 
   constructor(
     app: App,
     private readonly nodeTitle: string,
-    private readonly onSubmit: (userPrompt: string) => void
+    private readonly onGenerate: (userPrompt: string) => Promise<string[]>,
+    private readonly onConfirm: (titles: string[]) => void
   ) {
     super(app);
   }
@@ -178,7 +189,10 @@ class MindmapAiGenerateModal extends Modal {
     });
 
     const hintEl = contentEl.createDiv({ cls: "mindmap-ai-generate-hint" });
-    hintEl.setText("AI 会结合整张导图的上下文与你的描述来生成更准确的子节点。");
+    hintEl.setText("AI 会结合整张导图的上下文与你的描述生成预览。你可以勾选需要的结果，并在确认前编辑每条内容。");
+
+    this.previewEl = contentEl.createDiv({ cls: "mindmap-ai-generate-preview" });
+    this.renderPreview([]);
 
     const buttonContainer = contentEl.createDiv({ cls: "mindmap-ai-generate-actions" });
     const cancelBtn = buttonContainer.createEl("button", { text: "取消" });
@@ -187,28 +201,126 @@ class MindmapAiGenerateModal extends Modal {
       this.close();
     });
 
-    const submitBtn = buttonContainer.createEl("button", { text: "生成", cls: "mod-cta" });
-    submitBtn.type = "button";
-    submitBtn.addEventListener("click", () => {
-      const userPrompt = this.inputEl.value.trim();
-      if (!userPrompt) {
-        new Notice("请先填写生成要求");
+    this.generateBtn = buttonContainer.createEl("button", { text: "生成预览" });
+    this.generateBtn.type = "button";
+    this.generateBtn.addEventListener("click", () => {
+      void this.generatePreview();
+    });
+
+    this.confirmBtn = buttonContainer.createEl("button", { text: "确定生成", cls: "mod-cta" });
+    this.confirmBtn.type = "button";
+    this.confirmBtn.disabled = true;
+    this.confirmBtn.addEventListener("click", () => {
+      const selectedTitles = this.getSelectedTitles();
+      if (selectedTitles.length === 0) {
+        new Notice("请至少勾选 1 个要生成的子节点");
         return;
       }
-      this.onSubmit(userPrompt);
+      this.onConfirm(selectedTitles);
       this.close();
     });
 
     this.inputEl.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
-        submitBtn.click();
+        this.generateBtn.click();
       }
     });
 
     window.setTimeout(() => {
       this.inputEl.focus();
     }, 0);
+  }
+
+  private async generatePreview(): Promise<void> {
+    const userPrompt = this.inputEl.value.trim();
+    if (!userPrompt) {
+      new Notice("请先填写生成要求");
+      return;
+    }
+
+    this.generateBtn.disabled = true;
+    this.confirmBtn.disabled = true;
+    this.generateBtn.setText("生成中...");
+    this.renderPreview([], "正在生成预览...");
+
+    try {
+      const titles = await this.onGenerate(userPrompt);
+      this.renderPreview(titles);
+    } finally {
+      this.generateBtn.disabled = false;
+      this.generateBtn.setText("重新生成预览");
+      this.updateConfirmButtonState();
+    }
+  }
+
+  private renderPreview(titles: string[], emptyText = "生成后会在这里显示结果预览"): void {
+    this.previewEl.empty();
+    this.previewItems = [];
+
+    const headerEl = this.previewEl.createDiv({ cls: "mindmap-ai-generate-preview-header" });
+    headerEl.createEl("span", { text: "结果预览" });
+    if (titles.length > 0) {
+      const toolsEl = headerEl.createDiv({ cls: "mindmap-ai-generate-preview-tools" });
+      const selectAllBtn = toolsEl.createEl("button", { text: "全选" });
+      selectAllBtn.type = "button";
+      selectAllBtn.addEventListener("click", () => this.setAllPreviewItemsChecked(true));
+      const clearBtn = toolsEl.createEl("button", { text: "全不选" });
+      clearBtn.type = "button";
+      clearBtn.addEventListener("click", () => this.setAllPreviewItemsChecked(false));
+    }
+
+    if (titles.length === 0) {
+      this.previewEl.createDiv({ cls: "mindmap-ai-generate-preview-empty", text: emptyText });
+      this.updateConfirmButtonState();
+      return;
+    }
+
+    const listEl = this.previewEl.createDiv({ cls: "mindmap-ai-generate-preview-list" });
+    titles.forEach((title, index) => {
+      const rowEl = listEl.createDiv({ cls: "mindmap-ai-generate-preview-row" });
+      const checkbox = rowEl.createEl("input", { cls: "mindmap-ai-generate-preview-checkbox", type: "checkbox" });
+      checkbox.checked = true;
+      checkbox.title = "是否生成这个子节点";
+      const input = rowEl.createEl("input", {
+        cls: "mindmap-ai-generate-preview-input",
+        type: "text",
+        value: title,
+        attr: { "aria-label": `预览子节点 ${index + 1}` }
+      });
+      checkbox.addEventListener("change", () => this.updateConfirmButtonState());
+      input.addEventListener("input", () => this.updateConfirmButtonState());
+      this.previewItems.push({ checkbox, input });
+    });
+    this.updateConfirmButtonState();
+  }
+
+  private setAllPreviewItemsChecked(checked: boolean): void {
+    this.previewItems.forEach((item) => {
+      item.checkbox.checked = checked;
+    });
+    this.updateConfirmButtonState();
+  }
+
+  private getSelectedTitles(): string[] {
+    const seenTitles = new Set<string>();
+    const selectedTitles: string[] = [];
+    for (const item of this.previewItems) {
+      const title = item.input.value.trim();
+      const normalizedTitle = title.toLowerCase();
+      if (item.checkbox.checked && title.length > 0 && !seenTitles.has(normalizedTitle)) {
+        selectedTitles.push(title);
+        seenTitles.add(normalizedTitle);
+      }
+    }
+    return selectedTitles;
+  }
+
+  private updateConfirmButtonState(): void {
+    if (!this.confirmBtn) {
+      return;
+    }
+    this.confirmBtn.disabled = this.getSelectedTitles().length === 0;
   }
 }
 
@@ -6735,7 +6847,7 @@ export class MindmapView extends ItemView {
       return;
     }
 
-    const plugin = getMindmapPlugin(this.app);
+    const plugin = getMindmapPlugin(this.app as ObsidianAppWithPlugins);
     if (!plugin) {
       new Notice("无法读取插件设置");
       return;
@@ -6751,10 +6863,110 @@ export class MindmapView extends ItemView {
       return;
     }
 
-    const modal = new MindmapAiGenerateModal(this.app, node.title, (userPrompt) => {
-      void this.executeAiGenerateChildNodes(nodeId, userPrompt);
-    });
+    const modal = new MindmapAiGenerateModal(
+      this.app,
+      node.title,
+      (userPrompt) => this.generateAiChildNodePreview(nodeId, userPrompt),
+      (titles) => {
+        void this.confirmAiGeneratedChildNodes(nodeId, titles);
+      }
+    );
     modal.open();
+  }
+
+  private async generateAiChildNodePreview(nodeId: string, userPrompt: string): Promise<string[]> {
+    if (!this.doc) {
+      return [];
+    }
+
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return [];
+    }
+
+    const plugin = getMindmapPlugin(this.app as ObsidianAppWithPlugins);
+    if (!plugin) {
+      new Notice("无法读取插件设置");
+      return [];
+    }
+
+    const settings = plugin.settings;
+    const minCount = Math.max(1, settings.minChildCount);
+    const maxCount = Math.max(minCount, settings.maxChildCount);
+    this.setAiGeneratingNode(nodeId);
+
+    try {
+      const titles = await generateChildNodeTitles(settings, {
+        parentTitle: node.title,
+        parentNote: node.note,
+        existingChildren: node.children.map((child) => child.title),
+        userPrompt,
+        mindmapContext: serializeMindmapContext(this.doc, nodeId),
+        minCount,
+        maxCount
+      });
+
+      const existingTitles = new Set(node.children.map((child) => child.title.trim().toLowerCase()));
+      const seenTitles = new Set<string>();
+      const filteredTitles: string[] = [];
+      for (const title of titles) {
+        const trimmedTitle = title.trim();
+        const normalizedTitle = trimmedTitle.toLowerCase();
+        if (trimmedTitle.length > 0 && !existingTitles.has(normalizedTitle) && !seenTitles.has(normalizedTitle)) {
+          filteredTitles.push(trimmedTitle);
+          seenTitles.add(normalizedTitle);
+        }
+      }
+
+      if (filteredTitles.length === 0) {
+        new Notice("未生成可用的新子节点");
+      }
+      return filteredTitles;
+    } catch (error) {
+      new Notice(`生成子节点失败：${String(error)}`);
+      return [];
+    } finally {
+      this.setAiGeneratingNode(null);
+    }
+  }
+
+  private async confirmAiGeneratedChildNodes(nodeId: string, titles: string[]): Promise<void> {
+    if (!this.doc) {
+      return;
+    }
+
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return;
+    }
+
+    const existingTitles = new Set(node.children.map((child) => child.title.trim().toLowerCase()));
+    const seenTitles = new Set<string>();
+    const filteredTitles: string[] = [];
+    for (const title of titles) {
+      const trimmedTitle = title.trim();
+      const normalizedTitle = trimmedTitle.toLowerCase();
+      if (trimmedTitle.length > 0 && !existingTitles.has(normalizedTitle) && !seenTitles.has(normalizedTitle)) {
+        filteredTitles.push(trimmedTitle);
+        seenTitles.add(normalizedTitle);
+      }
+    }
+
+    if (filteredTitles.length === 0) {
+      new Notice("没有可生成的新子节点");
+      return;
+    }
+
+    this.aiChildCreationToken += 1;
+    this.aiAppearingNodes.clear();
+    this.stopAiAppearAnimationFrame();
+    this.setAiGeneratingNode(nodeId);
+    try {
+      await this.createChildNodesFromTitlesAnimated(nodeId, filteredTitles);
+      new Notice(`已生成 ${filteredTitles.length} 个子节点`);
+    } finally {
+      this.setAiGeneratingNode(null);
+    }
   }
 
   private async executeAiGenerateChildNodes(nodeId: string, userPrompt: string): Promise<void> {
@@ -6767,7 +6979,7 @@ export class MindmapView extends ItemView {
       return;
     }
 
-    const plugin = getMindmapPlugin(this.app);
+    const plugin = getMindmapPlugin(this.app as ObsidianAppWithPlugins);
     if (!plugin) {
       new Notice("无法读取插件设置");
       return;
