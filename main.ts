@@ -1,6 +1,7 @@
-import { Notice, Plugin, TFile, TFolder, normalizePath, type WorkspaceLeaf } from "obsidian";
+import { Notice, Plugin, TFile, TFolder, normalizePath, Modal, type App, type WorkspaceLeaf } from "obsidian";
 import { DEFAULT_SETTINGS, type MindmapPluginSettings } from "./src/settings";
 import { MindmapSettingTab } from "./src/settings-tab";
+import { normalizeMindmapDocument, walkNodes } from "./src/store";
 import { createDefaultMindmap, type MindmapDocument, type MindmapNode } from "./src/types";
 import { MINDMAP_VIEW_TYPE, MindmapView } from "./src/view";
 
@@ -8,11 +9,146 @@ const PRIMARY_MINDMAP_EXTENSION = "mindmap";
 const LEGACY_MINDMAP_EXTENSION = "mindmap.json";
 const DEBUG_TAB_DEDUPE = true;
 
+type MindmapSearchMatchType = "title" | "note";
+
+type MindmapSearchResult = {
+  file: TFile;
+  nodeId: string;
+  nodeTitle: string;
+  matchType: MindmapSearchMatchType;
+  excerpt: string;
+  path: string[];
+};
+
+class MindmapGlobalSearchModal extends Modal {
+  private inputEl!: HTMLInputElement;
+  private resultsEl!: HTMLDivElement;
+  private statusEl!: HTMLDivElement;
+  private results: MindmapSearchResult[] = [];
+  private searchTimer: number | null = null;
+  private searchToken = 0;
+  private readonly searchDebounceMs = 350;
+
+  constructor(
+    app: App,
+    private readonly search: (query: string) => Promise<MindmapSearchResult[]>,
+    private readonly onChoose: (result: MindmapSearchResult) => Promise<void>
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("mindmap-global-search-modal");
+    contentEl.createEl("h2", { text: "全局搜索导图" });
+
+    this.inputEl = contentEl.createEl("input", {
+      cls: "mindmap-global-search-input",
+      type: "search",
+      attr: {
+        placeholder: "搜索节点标题或节点笔记内容..."
+      }
+    });
+
+    this.statusEl = contentEl.createDiv({ cls: "mindmap-global-search-status" });
+    this.resultsEl = contentEl.createDiv({ cls: "mindmap-global-search-results" });
+    this.renderEmpty("输入关键词开始搜索所有导图");
+
+    this.inputEl.addEventListener("input", () => this.scheduleSearch());
+    this.inputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && this.results[0]) {
+        event.preventDefault();
+        void this.chooseResult(this.results[0]);
+      }
+    });
+
+    window.setTimeout(() => this.inputEl.focus(), 0);
+  }
+
+  onClose(): void {
+    if (this.searchTimer !== null) {
+      window.clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
+  }
+
+  private scheduleSearch(): void {
+    if (this.searchTimer !== null) {
+      window.clearTimeout(this.searchTimer);
+    }
+    this.searchTimer = window.setTimeout(() => {
+      this.searchTimer = null;
+      void this.runSearch();
+    }, this.searchDebounceMs);
+  }
+
+  private async runSearch(): Promise<void> {
+    const query = this.inputEl.value.trim();
+    const token = ++this.searchToken;
+    if (!query) {
+      this.results = [];
+      this.renderEmpty("输入关键词开始搜索所有导图");
+      return;
+    }
+    if (query.length < 2) {
+      this.results = [];
+      this.renderEmpty("至少输入 2 个字符开始搜索");
+      return;
+    }
+
+    this.statusEl.setText(this.results.length > 0 ? "继续输入后将更新搜索结果..." : "搜索中...");
+    const results = await this.search(query);
+    if (token !== this.searchToken) {
+      return;
+    }
+    this.results = results;
+    this.renderResults(results, query);
+  }
+
+  private renderEmpty(text: string): void {
+    this.statusEl.setText(text);
+    this.resultsEl.empty();
+  }
+
+  private renderResults(results: MindmapSearchResult[], query: string): void {
+    this.resultsEl.empty();
+    if (results.length === 0) {
+      this.statusEl.setText(`未找到与“${query}”相关的导图节点`);
+      return;
+    }
+    this.statusEl.setText(`找到 ${results.length} 条结果`);
+    results.forEach((result) => {
+      const itemEl = this.resultsEl.createEl("button", { cls: "mindmap-global-search-result" });
+      itemEl.type = "button";
+      itemEl.addEventListener("click", () => {
+        void this.chooseResult(result);
+      });
+
+      const titleEl = itemEl.createDiv({ cls: "mindmap-global-search-result-title" });
+      titleEl.createSpan({ cls: "mindmap-global-search-result-node", text: result.nodeTitle || "未命名节点" });
+      titleEl.createSpan({
+        cls: "mindmap-global-search-result-badge",
+        text: result.matchType === "title" ? "标题" : "笔记"
+      });
+
+      itemEl.createDiv({ cls: "mindmap-global-search-result-excerpt", text: result.excerpt });
+      itemEl.createDiv({ cls: "mindmap-global-search-result-path", text: `${result.file.path} · ${result.path.join(" / ")}` });
+    });
+  }
+
+  private async chooseResult(result: MindmapSearchResult): Promise<void> {
+    this.close();
+    await this.onChoose(result);
+  }
+}
+
 export default class MindmapPlugin extends Plugin {
   settings: MindmapPluginSettings = { ...DEFAULT_SETTINGS };
   private readonly preferredLeafIds = new Map<string, string>();
   private readonly dedupeTimers = new Set<number>();
   private isApplyingDedupe = false;
+  private lastSplitCreationTime = 0;
   private readonly SPLIT_SCREEN_PROTECTION_DELAY = 5000; // 5 seconds protection after explicit split creation
   private readonly intentionalSplitLeafIds = new Set<string>(); // Track intentionally created splits
   
@@ -146,6 +282,15 @@ export default class MindmapPlugin extends Plugin {
           void this.openMindmapFile(file);
         }
         return true;
+      }
+    });
+
+    this.addCommand({
+      id: "global-search-mindmaps",
+      name: "Search all mindmaps",
+      hotkeys: [{ modifiers: ["Mod"], key: "f" }],
+      callback: () => {
+        this.openGlobalSearchModal();
       }
     });
   }
@@ -401,6 +546,99 @@ export default class MindmapPlugin extends Plugin {
     return !!file && file.extension.toLowerCase() === "md";
   }
 
+  public openGlobalSearchModal(): void {
+    new MindmapGlobalSearchModal(
+      this.app,
+      (query) => this.searchMindmapFiles(query),
+      (result) => this.openSearchResult(result)
+    ).open();
+  }
+
+  private async searchMindmapFiles(query: string): Promise<MindmapSearchResult[]> {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    const results: MindmapSearchResult[] = [];
+    const files = this.app.vault.getFiles()
+      .filter((file) => this.isMindmapFile(file))
+      .sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: "base" }));
+
+    for (const file of files) {
+      try {
+        const raw = await this.app.vault.cachedRead(file);
+        const parsed = JSON.parse(raw) as MindmapDocument;
+        const doc = normalizeMindmapDocument(parsed);
+        const nodePaths = new Map<string, string[]>();
+        const collectPaths = (node: MindmapNode, path: string[]): void => {
+          const nodeTitle = node.title.trim() || "未命名节点";
+          const nextPath = [...path, nodeTitle];
+          nodePaths.set(node.id, nextPath);
+          node.children.forEach((child) => collectPaths(child, nextPath));
+        };
+        collectPaths(doc.root, []);
+
+        walkNodes(doc.root, (node) => {
+          const title = node.title ?? "";
+          const note = node.note ?? "";
+          const titleIndex = title.toLowerCase().indexOf(normalizedQuery);
+          const noteIndex = note.toLowerCase().indexOf(normalizedQuery);
+          if (titleIndex >= 0) {
+            results.push({
+              file,
+              nodeId: node.id,
+              nodeTitle: title.trim() || "未命名节点",
+              matchType: "title",
+              excerpt: this.createSearchExcerpt(title, titleIndex, query),
+              path: nodePaths.get(node.id) ?? [title.trim() || "未命名节点"]
+            });
+            return;
+          }
+          if (noteIndex >= 0) {
+            results.push({
+              file,
+              nodeId: node.id,
+              nodeTitle: title.trim() || "未命名节点",
+              matchType: "note",
+              excerpt: this.createSearchExcerpt(note, noteIndex, query),
+              path: nodePaths.get(node.id) ?? [title.trim() || "未命名节点"]
+            });
+          }
+        });
+      } catch (error) {
+        console.warn("Failed to search mindmap file", file.path, error);
+      }
+    }
+
+    return results.slice(0, 100);
+  }
+
+  private createSearchExcerpt(text: string, matchIndex: number, query: string): string {
+    const compactText = text.replace(/\s+/g, " ").trim();
+    if (!compactText) {
+      return "";
+    }
+    const normalizedText = compactText.toLowerCase();
+    const normalizedQuery = query.trim().toLowerCase();
+    const compactMatchIndex = Math.max(0, normalizedText.indexOf(normalizedQuery, Math.max(0, matchIndex - 20)));
+    const start = Math.max(0, compactMatchIndex - 36);
+    const end = Math.min(compactText.length, compactMatchIndex + Math.max(normalizedQuery.length, 1) + 72);
+    const prefix = start > 0 ? "..." : "";
+    const suffix = end < compactText.length ? "..." : "";
+    return `${prefix}${compactText.slice(start, end)}${suffix}`;
+  }
+
+  private async openSearchResult(result: MindmapSearchResult): Promise<void> {
+    const leaf = await this.openMindmapFile(result.file);
+    const view = leaf.view;
+    if (view instanceof MindmapView) {
+      view.revealNodeById(result.nodeId, { openDrawer: result.matchType === "note" });
+      return;
+    }
+    new Notice("已打开导图，但未能定位节点");
+  }
+
   private scheduleMindmapTabDedupe(file?: TFile): void {
     const delays = [30, 120, 360]; // Removed 0ms delay to avoid race conditions with new splits
     this.logTabDebug("schedule-dedupe", { file: file?.path, delays });
@@ -422,7 +660,7 @@ export default class MindmapPlugin extends Plugin {
     }
   }
 
-  private async openMindmapFile(file: TFile): Promise<void> {
+  private async openMindmapFile(file: TFile): Promise<WorkspaceLeaf> {
     const existingLeaf = this.findLeafByFilePath(file.path) ?? this.findMindmapLeafByPath(file.path);
     // Only reuse existing leaf if it exists; otherwise create a new split
     const leaf = existingLeaf ?? this.app.workspace.getLeaf(true);
@@ -453,6 +691,7 @@ export default class MindmapPlugin extends Plugin {
       file: file.path,
       targetLeafId: this.getLeafId(leaf)
     });
+    return leaf;
   }
 
   private findMindmapLeafByPath(path: string): WorkspaceLeaf | undefined {

@@ -40,6 +40,7 @@ export const llmProviderRequiresApiKey = (provider: LlmProvider): boolean => {
 export interface MindmapPluginApi {
   settings: MindmapPluginSettings;
   saveSettings(): Promise<void>;
+  openGlobalSearchModal?(): void;
 }
 
 export const MINDMAP_PLUGIN_ID = "mindmap-notes";

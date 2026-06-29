@@ -670,9 +670,11 @@ export class MindmapView extends ItemView {
   private mobileSyncButtonEl!: HTMLButtonElement;
   private mobileRefreshButtonEl!: HTMLButtonElement;
   private desktopActionClusterEl!: HTMLDivElement;
+  private desktopSearchButtonEl!: HTMLButtonElement;
   private desktopSyncButtonEl!: HTMLButtonElement;
   private desktopRefreshButtonEl!: HTMLButtonElement;
   private desktopRootButtonEl!: HTMLButtonElement;
+  private mobileSearchButtonEl!: HTMLButtonElement;
   private mobileZenButtonEl!: HTMLButtonElement;
   private mobileRootButtonEl!: HTMLButtonElement;
   private mobileActionClusterEl!: HTMLDivElement;
@@ -755,7 +757,30 @@ export class MindmapView extends ItemView {
   private aiAppearingNodes = new Map<string, number>();
   private aiChildCreationToken = 0;
   private aiAppearAnimationFrame: number | null = null;
+  private readonly onGlobalSearchKeydown = (event: KeyboardEvent): void => {
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "f") {
+      return;
+    }
+    if (this.app.workspace.getActiveViewOfType(MindmapView) !== this) {
+      return;
+    }
+    if (this.shouldIgnoreMindmapShortcuts(event)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.openGlobalSearchModal();
+  };
+
   private readonly onKeydown = (event: KeyboardEvent): void => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      if (this.shouldIgnoreMindmapShortcuts(event)) {
+        return;
+      }
+      event.preventDefault();
+      this.openGlobalSearchModal();
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
       if (this.shouldIgnoreMindmapShortcuts(event)) {
         return;
@@ -903,6 +928,15 @@ export class MindmapView extends ItemView {
 
   private focusContainerWithoutScroll(): void {
     this.containerEl.focus({ preventScroll: true });
+  }
+
+  private openGlobalSearchModal(): void {
+    const plugin = getMindmapPlugin(this.app as ObsidianAppWithPlugins);
+    if (!plugin?.openGlobalSearchModal) {
+      new Notice("无法打开全局搜索");
+      return;
+    }
+    plugin.openGlobalSearchModal();
   }
 
   private isDirectLinkOpenGesture(event: MouseEvent | PointerEvent): boolean {
@@ -2290,6 +2324,7 @@ export class MindmapView extends ItemView {
     this.containerEl.addClass("mindmap-root-view");
     this.containerEl.toggleClass("is-mobile", this.isMobileLayout);
     this.containerEl.tabIndex = 0;
+    window.addEventListener("keydown", this.onGlobalSearchKeydown, { capture: true });
     this.containerEl.addEventListener("keydown", this.onKeydown);
     if (this.isMobileLayout) {
       this.containerEl.addEventListener("pointerdown", this.activateMindmapLeaf);
@@ -2316,6 +2351,13 @@ export class MindmapView extends ItemView {
     this.canvasEl.addEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     this.marqueeEl = this.canvasEl.createDiv({ cls: "mindmap-selection-marquee is-hidden" });
     this.desktopActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-desktop-action-cluster" });
+    this.desktopSearchButtonEl = this.desktopActionClusterEl.createEl("button", { cls: "mindmap-desktop-search-button", text: "🔍" });
+    this.desktopSearchButtonEl.type = "button";
+    this.desktopSearchButtonEl.title = "全局搜索导图";
+    this.desktopSearchButtonEl.setAttribute("aria-label", "全局搜索导图");
+    this.desktopSearchButtonEl.addEventListener("click", () => {
+      this.openGlobalSearchModal();
+    });
     // this.desktopSyncButtonEl = this.desktopActionClusterEl.createEl("button", { cls: "mindmap-desktop-sync-button", text: "同步" });
     // this.desktopSyncButtonEl.type = "button";
     // this.desktopSyncButtonEl.addEventListener("click", () => {
@@ -2372,6 +2414,16 @@ export class MindmapView extends ItemView {
       this.closeMobileNodeTooltip();
       this.collapseMobileGlobalActions();
       void this.redo();
+    });
+
+    this.mobileSearchButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-search-button", text: "🔍" });
+    this.mobileSearchButtonEl.type = "button";
+    this.mobileSearchButtonEl.title = "全局搜索导图";
+    this.mobileSearchButtonEl.setAttribute("aria-label", "全局搜索导图");
+    this.mobileSearchButtonEl.addEventListener("click", () => {
+      this.closeMobileNodeTooltip();
+      this.collapseMobileGlobalActions();
+      this.openGlobalSearchModal();
     });
 
     // 增加“删除节点”按钮
@@ -2809,6 +2861,7 @@ export class MindmapView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    window.removeEventListener("keydown", this.onGlobalSearchKeydown, { capture: true });
     this.containerEl.removeEventListener("keydown", this.onKeydown);
     this.canvasEl?.removeEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     if (this.isMobileLayout) {
@@ -4153,6 +4206,34 @@ export class MindmapView extends ItemView {
     if (!this.focusLinkedNodeFromPath(sourcePath)) {
       // new Notice("未找到指向来源导图的关联节点");
     }
+  }
+
+  public revealNodeById(nodeId: string, options?: { openDrawer?: boolean }): boolean {
+    if (!this.doc) {
+      return false;
+    }
+    const node = findNodeById(this.doc, nodeId);
+    if (!node) {
+      return false;
+    }
+    const expanded = this.expandNodeAndAncestors(nodeId);
+    if (expanded) {
+      this.normalizeLayout();
+      this.requestSave();
+    }
+    this.shouldCenterOnNextRender = false;
+    this.shouldFocusRootOnNextRender = false;
+    this.setSingleSelectedNode(nodeId);
+    if (options?.openDrawer) {
+      void this.openDrawer(nodeId);
+    } else {
+      this.renderMindmap();
+    }
+    window.requestAnimationFrame(() => {
+      this.centerViewportOnNodeById(nodeId);
+      window.requestAnimationFrame(() => this.centerViewportOnNodeById(nodeId));
+    });
+    return true;
   }
 
   private getMindmapLinkCandidates(): MindmapLinkCandidate[] {
