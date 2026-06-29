@@ -1321,7 +1321,7 @@
    top: calc(64px + env(safe-area-inset-top, 0px));
  }
 
- .mindmap-root-view.is-expanded .mindmap-note-toc-panel {
+ .mindmap-note-toc.is-expanded .mindmap-note-toc-panel {
    display: flex;
    flex-direction: column;
    gap: 7px;

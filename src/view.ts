@@ -4536,7 +4536,9 @@ export class MindmapView extends ItemView {
     const toggleButtonEl = this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
     toggleButtonEl.type = "button";
     toggleButtonEl.setAttribute("aria-expanded", wasExpanded && headings.length > 0 ? "true" : "false");
-    toggleButtonEl.addEventListener("click", () => {
+    toggleButtonEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       this.toggleNoteToc();
     });
     if (headings.length === 0) {
@@ -4553,7 +4555,9 @@ export class MindmapView extends ItemView {
       });
       itemEl.type = "button";
       itemEl.title = heading.title;
-      itemEl.addEventListener("click", () => {
+      itemEl.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
         this.noteTocEl.removeClass("is-expanded");
         this.noteTocEl.addClass("is-collapsed");
         this.noteTocEl.querySelector(".mindmap-note-toc-fab")?.setAttribute("aria-expanded", "false");
@@ -4591,10 +4595,16 @@ export class MindmapView extends ItemView {
       if (!heading) {
         return;
       }
-      heading.scrollIntoView({ behavior: "smooth", block: "start" });
+      const scrollContainer = this.notePreviewEl.scrollHeight > this.notePreviewEl.clientHeight
+        ? this.notePreviewEl
+        : this.noteSurfaceEl;
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const headingRect = heading.getBoundingClientRect();
+      const nextScrollTop = scrollContainer.scrollTop + headingRect.top - containerRect.top - 12;
+      scrollContainer.scrollTo({ top: Math.max(0, nextScrollTop), behavior: "smooth" });
       heading.addClass("mindmap-note-heading-highlight");
       window.setTimeout(() => heading.removeClass("mindmap-note-heading-highlight"), 900);
-    }, 0);
+    }, 80);
   }
 
   private findMarkdownPositionFromPreviewClick(event: MouseEvent): number {
