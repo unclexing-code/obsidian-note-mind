@@ -2620,6 +2620,16 @@ export class MindmapView extends ItemView {
       if (!node) {
         return;
       }
+      if (this.isRootMindmapRootNode(node)) {
+        if (node.linkTarget) {
+          node.linkTarget = "";
+          this.nodeLinkInputEl.value = "";
+          this.updateNodeLinkActionButton("");
+          this.requestSave();
+          this.renderMindmap();
+        }
+        return;
+      }
       if (!this.linkHistoryCapturedForSession) {
         this.captureHistorySnapshot();
         this.linkHistoryCapturedForSession = true;
@@ -2997,9 +3007,12 @@ export class MindmapView extends ItemView {
       this.noteHistoryCapturedForSession = false;
       this.linkHistoryCapturedForSession = false;
       this.normalizeLayout();
+      const rootNodeLinkCleared = this.clearRootMindmapRootNodeLinkTarget();
       this.refreshTabTitle();
       if (!this.doc.selfPath && this.file) {
         this.doc.selfPath = this.file.path;
+        this.requestSave();
+      } else if (rootNodeLinkCleared) {
         this.requestSave();
       }
       this.shouldCenterOnNextRender = true;
@@ -4064,6 +4077,24 @@ export class MindmapView extends ItemView {
     return target;
   }
 
+  private isRootMindmapRootNode(node: MindmapNode): boolean {
+    return !!this.file
+      && normalizePath(this.file.path) === normalizePath("root.mindmap")
+      && node.id === this.doc?.root.id
+      && node.title.trim().toLowerCase() === "root";
+  }
+
+  private clearRootMindmapRootNodeLinkTarget(): boolean {
+    if (!this.doc || !this.isRootMindmapRootNode(this.doc.root)) {
+      return false;
+    }
+    if (!this.doc.root.linkTarget) {
+      return false;
+    }
+    this.doc.root.linkTarget = "";
+    return true;
+  }
+
   private getRootMindmapFile(): TFile | null {
     const rootFile = this.app.vault.getAbstractFileByPath(normalizePath("root.mindmap"));
     return rootFile instanceof TFile && this.isMindmapFile(rootFile) ? rootFile : null;
@@ -4108,6 +4139,9 @@ export class MindmapView extends ItemView {
   private ensureRootSourceLink(sourcePath: string | null): boolean {
     if (!this.doc || !sourcePath) {
       return false;
+    }
+    if (this.isRootMindmapRootNode(this.doc.root)) {
+      return this.clearRootMindmapRootNodeLinkTarget();
     }
     const sourceFile = this.app.vault.getAbstractFileByPath(normalizePath(sourcePath));
     if (!(sourceFile instanceof TFile) || !this.isMindmapFile(sourceFile)) {
@@ -4295,6 +4329,14 @@ export class MindmapView extends ItemView {
     if (!node) {
       return;
     }
+    if (this.isRootMindmapRootNode(node)) {
+      if (node.linkTarget) {
+        this.captureHistorySnapshot();
+        node.linkTarget = "";
+        this.requestSave();
+      }
+      return;
+    }
     const nextTarget = linkTarget.trim();
     if ((node.linkTarget ?? "") !== nextTarget) {
       this.captureHistorySnapshot();
@@ -4395,13 +4437,13 @@ export class MindmapView extends ItemView {
     const drawerHeaderPathEl = this.drawerHeaderEl.querySelector<HTMLElement>(".mindmap-drawer-header-path");
     drawerHeaderPathEl?.setText(this.doc?.selfPath ?? this.file?.path ?? "");
     // this.nodeTitleInputEl.value = node.title;
-    const isRootNode = node.id === this.doc.root.id;
-    this.nodeLinkInputEl.value = node.linkTarget ?? "";
-    this.nodeLinkInputEl.disabled = false;
-    this.nodeLinkInputEl.toggleClass("is-readonly", false);
-    this.nodeLinkInputEl.placeholder = isRootNode ? "输入中心节点链接目标：导图或笔记路径" : "输入链接目标：导图或笔记路径";
-    this.nodeLinkInputEl.setAttribute("aria-readonly", "false");
-    this.updateNodeLinkActionButton(node.linkTarget ?? "");
+    const isRootLinkDisabled = this.isRootMindmapRootNode(node);
+    this.nodeLinkInputEl.value = isRootLinkDisabled ? "" : node.linkTarget ?? "";
+    this.nodeLinkInputEl.disabled = isRootLinkDisabled;
+    this.nodeLinkInputEl.toggleClass("is-readonly", isRootLinkDisabled);
+    this.nodeLinkInputEl.placeholder = isRootLinkDisabled ? "root 根节点不支持链接" : "输入链接目标：导图或笔记路径";
+    this.nodeLinkInputEl.setAttribute("aria-readonly", isRootLinkDisabled ? "true" : "false");
+    this.updateNodeLinkActionButton(isRootLinkDisabled ? "" : node.linkTarget ?? "");
     this.setNoteEditorValue(node.note ?? "");
     this.noteInputEl.value = node.note ?? "";
     this.cancelPendingMarkdownRender();
