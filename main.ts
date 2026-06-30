@@ -40,6 +40,7 @@ class MindmapGlobalSearchModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
+    this.modalEl.addClass("mindmap-global-search-modal-container");
     contentEl.addClass("mindmap-global-search-modal");
     // contentEl.createEl("h2", { text: "全局搜索导图" });
 

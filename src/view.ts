@@ -1572,7 +1572,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
       )
     ) {
       return;
@@ -1589,7 +1589,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
       )
     ) {
       return;
@@ -1606,7 +1606,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox"
+        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
       )
     ) {
       return;
@@ -1683,7 +1683,7 @@ export class MindmapView extends ItemView {
       this.onTouchStart(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
       return;
     }
     event.stopPropagation();
@@ -1717,7 +1717,7 @@ export class MindmapView extends ItemView {
       this.onTouchMove(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
       return;
     }
     event.stopPropagation();
@@ -1751,7 +1751,7 @@ export class MindmapView extends ItemView {
       this.onTouchEnd(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox")) {
+    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
       return;
     }
     event.stopPropagation();
@@ -2012,7 +2012,7 @@ export class MindmapView extends ItemView {
     if (!(target instanceof Element)) {
       return false;
     }
-    return !!target.closest(".mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input");
+    return !!target.closest(".mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-global-search-modal, .mindmap-global-search-modal-container");
   }
 
   private readonly onWheelPan = (event: WheelEvent): void => {
