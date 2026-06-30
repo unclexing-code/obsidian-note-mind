@@ -9,6 +9,12 @@ export interface MindmapComment {
   updatedAt?: number;
 }
 
+export interface MindmapNodeLink {
+  id: string;
+  label: string;
+  target: string;
+}
+
 export interface MindmapNode {
   id: string;
   title: string;
@@ -20,6 +26,7 @@ export interface MindmapNode {
   collapsed?: boolean;
   note?: string;
   linkTarget?: string;
+  links?: MindmapNodeLink[];
   comments?: MindmapComment[];
   children: MindmapNode[];
 }

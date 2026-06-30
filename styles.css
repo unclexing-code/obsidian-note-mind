@@ -1602,10 +1602,99 @@
    display: none;
  }
 
+ .mindmap-node-link-actions.is-hidden {
+   display: none;
+ }
+
  .mindmap-node-link-action-button.is-disabled,
  .mindmap-node-link-action-button:disabled {
    opacity: 0.45;
    cursor: not-allowed;
+ }
+
+ .mindmap-node-link-list {
+   display: flex;
+   flex-direction: column;
+   gap: 6px;
+   margin: 6px 0;
+ }
+
+ .mindmap-node-link-row {
+   display: grid;
+   grid-template-columns: minmax(70px, 0.6fr) minmax(120px, 1fr) auto auto;
+   gap: 6px;
+   align-items: center;
+ }
+
+ .mindmap-node-link-label-input,
+ .mindmap-node-link-target-input,
+ .mindmap-note-search-input {
+   width: 100%;
+   min-width: 0;
+   box-sizing: border-box;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 8px;
+   padding: 6px 10px;
+   background: var(--background-primary);
+   color: var(--text-normal);
+ }
+
+ .mindmap-node-link-row-jump,
+ .mindmap-node-link-row-delete,
+ .mindmap-node-link-add-button {
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 999px;
+   padding: 6px 10px;
+   background: var(--background-primary);
+   color: var(--text-normal);
+   cursor: pointer;
+   white-space: nowrap;
+ }
+
+ .mindmap-node-link-row-delete {
+   width: 30px;
+   height: 30px;
+   padding: 0;
+   color: var(--text-muted);
+   font-size: 18px;
+   font-weight: 800;
+   line-height: 1;
+ }
+
+ .mindmap-node-link-add-button {
+   align-self: flex-start;
+   margin-bottom: 6px;
+   color: var(--interactive-accent);
+   font-weight: 700;
+ }
+
+ .mindmap-node-link-row-jump:hover,
+ .mindmap-node-link-row-delete:hover,
+ .mindmap-node-link-add-button:hover,
+ .mindmap-node-link-row-jump:focus-visible,
+ .mindmap-node-link-row-delete:focus-visible,
+ .mindmap-node-link-add-button:focus-visible {
+   border-color: var(--interactive-accent);
+   outline: none;
+ }
+
+ .mindmap-node-link-row-jump:disabled,
+ .mindmap-node-link-row-delete:disabled,
+ .mindmap-node-link-add-button:disabled,
+ .mindmap-node-link-add-button.is-disabled {
+   opacity: 0.45;
+   cursor: not-allowed;
+ }
+
+ .mindmap-note-search-input {
+   margin: 0 0 8px;
+ }
+
+ .mindmap-note-search-match {
+   border-radius: 3px;
+   background: color-mix(in srgb, #ffd54a 78%, var(--background-primary));
+   color: #1f1f1f;
+   padding: 0 0.08em;
  }
 
  .mindmap-node-title-input,

@@ -8,7 +8,7 @@ import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, TFile, 
 import { generateChildNodeTitles, serializeMindmapContext } from "./llm";
 import { addChildNode, findNodeById, findParentOfNode, normalizeMindmapDocument, removeNode, reorderNodeWithinParent, reparentNode, visibleNodes, walkNodes } from "./store";
 import { getMindmapPlugin, llmProviderRequiresApiKey } from "./settings";
-import { createDefaultMindmap, type MindmapDocument, type MindmapNode, type MindmapComment } from "./types";
+import { createDefaultMindmap, type MindmapDocument, type MindmapNode, type MindmapNodeLink, type MindmapComment } from "./types";
 
 type MindmapClipboardPayload = {
   version: 1;
@@ -689,7 +689,10 @@ export class MindmapView extends ItemView {
   private noteModeToggleEl!: HTMLButtonElement;
   private commentsToggleBtn!: HTMLButtonElement;
   private noteToolbarEl!: HTMLDivElement;
+  private noteSearchInputEl!: HTMLInputElement;
   private noteTocEl!: HTMLDivElement;
+  private nodeLinkListEl!: HTMLDivElement;
+  private nodeLinkAddButtonEl!: HTMLButtonElement;
   private nodeLinkInputEl!: HTMLInputElement;
   private nodeLinkClearButtonEl!: HTMLButtonElement;
   private noteSurfaceEl!: HTMLDivElement;
@@ -2448,11 +2451,11 @@ export class MindmapView extends ItemView {
         return;
       }
       const node = findNodeById(this.doc, this.selectedNodeId);
-      if (!node?.linkTarget?.trim()) {
+      if (!node || this.getNodeLinks(node).length === 0) {
         return;
       }
       this.unlockMobileZenIfNeeded();
-      void this.openLinkedTarget(node.linkTarget);
+      void this.openNodeLinks(node);
     });
     // this.mobileSyncButtonEl = mobileActionClusterEl.createEl("button", { cls: "mindmap-mobile-sync-button", text: "同步" });
     // this.mobileSyncButtonEl.type = "button";
@@ -2581,7 +2584,7 @@ export class MindmapView extends ItemView {
     //   this.requestSave();
     //   this.renderMindmap();
     // });
-    const nodeLinkActionsEl = this.drawerEl.createDiv({ cls: "mindmap-node-link-actions" });
+    const nodeLinkActionsEl = this.drawerEl.createDiv({ cls: "mindmap-node-link-actions is-hidden" });
     this.nodeLinkInputEl = nodeLinkActionsEl.createEl("input", {
       cls: "mindmap-node-link-input",
       type: "text"
@@ -2611,11 +2614,11 @@ export class MindmapView extends ItemView {
         return;
       }
       const node = findNodeById(this.doc, this.selectedNodeId);
-      if (!node?.linkTarget?.trim()) {
+      if (!node || this.getNodeLinks(node).length === 0) {
         return;
       }
       this.unlockMobileZenIfNeeded();
-      void this.openLinkedTarget(node.linkTarget);
+      void this.openNodeLinks(node);
     });
     this.nodeLinkInputEl.addEventListener("input", () => {
       if (!this.doc || !this.selectedNodeId) {
@@ -2640,9 +2643,30 @@ export class MindmapView extends ItemView {
         this.linkHistoryCapturedForSession = true;
       }
       node.linkTarget = this.nodeLinkInputEl.value.trim();
+      if (!node.links || node.links.length === 0) {
+        node.links = node.linkTarget ? [{ id: crypto.randomUUID(), label: "链接", target: node.linkTarget }] : [];
+      } else {
+        node.links[0].target = node.linkTarget;
+        if (!node.links[0].label.trim()) {
+          node.links[0].label = "链接";
+        }
+      }
+      this.renderNodeLinkList(node);
       this.updateNodeLinkActionButton(node.linkTarget ?? "");
       this.requestSave();
       this.renderMindmap();
+    });
+    this.nodeLinkListEl = this.drawerEl.createDiv({ cls: "mindmap-node-link-list" });
+    this.nodeLinkAddButtonEl = this.drawerEl.createEl("button", { cls: "mindmap-node-link-add-button", text: "+ 添加链接" });
+    this.nodeLinkAddButtonEl.type = "button";
+    this.nodeLinkAddButtonEl.addEventListener("click", () => {
+      if (!this.doc || !this.selectedNodeId) {
+        return;
+      }
+      const node = findNodeById(this.doc, this.selectedNodeId);
+      if (node) {
+        this.addNodeLink(node);
+      }
     });
     this.noteToolbarEl = this.drawerEl.createDiv({ cls: "mindmap-mobile-note-toolbar" });
     [
@@ -2659,6 +2683,12 @@ export class MindmapView extends ItemView {
     if (!this.isMobileLayout) {
       this.noteToolbarEl.addClass("is-hidden");
     }
+    this.noteSearchInputEl = this.drawerEl.createEl("input", {
+      cls: "mindmap-note-search-input",
+      type: "search"
+    });
+    this.noteSearchInputEl.placeholder = "搜索当前节点笔记...";
+    this.noteSearchInputEl.addEventListener("input", () => this.applyNoteSearchHighlight());
     this.noteSurfaceEl = this.drawerEl.createDiv({ cls: "mindmap-note-surface" });
     this.noteSelectionToolbarEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-selection-toolbar is-hidden" });
     // Create formatting buttons for edit mode only (精简为最常用的8个)
@@ -3403,7 +3433,8 @@ export class MindmapView extends ItemView {
       }
       group.appendChild(rect);
 
-      const titleHasLink = !!node.linkTarget?.trim();
+      const titleLinks = this.getNodeLinks(node);
+      const titleHasLink = titleLinks.length > 0;
       const titleBox = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
       titleBox.setAttribute("x", String(-size.width / 2 + 10));
       titleBox.setAttribute("y", String(-size.height / 2 + 6));
@@ -3422,7 +3453,8 @@ export class MindmapView extends ItemView {
         text.classList.add("is-ai-generating");
       }
       text.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
-      text.textContent = isAiGenerating ? `${node.title} ✨` : node.title;
+      const linkSuffix = titleLinks.length > 1 ? ` 🔗${titleLinks.length}` : titleLinks.length === 1 ? " 🔗" : "";
+      text.textContent = isAiGenerating ? `${node.title} ✨${linkSuffix}` : `${node.title}${linkSuffix}`;
       if (this.editingNodeId === node.id) {
         titleBox.style.display = "none";
       }
@@ -3498,7 +3530,7 @@ export class MindmapView extends ItemView {
       }
 
       group.addEventListener("pointerdown", (event) => {
-        if (this.isDirectLinkOpenGesture(event) && !!node.linkTarget?.trim()) {
+        if (this.isDirectLinkOpenGesture(event) && this.getNodeLinks(node).length > 0) {
           event.preventDefault();
           event.stopPropagation();
           return;
@@ -3509,13 +3541,13 @@ export class MindmapView extends ItemView {
         if (event.target instanceof Element && event.target.closest(".mindmap-collapse-group, .mindmap-jump-group")) {
           return;
         }
-        if (this.isDirectLinkOpenGesture(event) && !!node.linkTarget?.trim()) {
+        if (this.isDirectLinkOpenGesture(event) && this.getNodeLinks(node).length > 0) {
           event.preventDefault();
           event.stopPropagation();
           this.setSingleSelectedNode(node.id);
           this.renderMindmap();
           this.unlockMobileZenIfNeeded();
-          void this.openLinkedTarget(node.linkTarget);
+          void this.openNodeLinks(node, event);
           return;
         }
         if (this.pendingNodeSelectionTimer) {
@@ -4293,9 +4325,10 @@ export class MindmapView extends ItemView {
       return;
     }
     if (this.isRootMindmapRootNode(node)) {
-      if (node.linkTarget) {
+      if (node.linkTarget || (node.links?.length ?? 0) > 0) {
         this.captureHistorySnapshot();
         node.linkTarget = "";
+        node.links = [];
         this.requestSave();
       }
       return;
@@ -4304,9 +4337,11 @@ export class MindmapView extends ItemView {
     if ((node.linkTarget ?? "") !== nextTarget) {
       this.captureHistorySnapshot();
       node.linkTarget = nextTarget;
+      node.links = nextTarget ? [{ id: crypto.randomUUID(), label: "链接", target: nextTarget }] : [];
     }
     if (this.selectedNodeId === nodeId && this.nodeLinkInputEl) {
       this.nodeLinkInputEl.value = nextTarget;
+      this.renderNodeLinkList(node);
       this.updateNodeLinkActionButton(nextTarget);
     }
     this.requestSave();
@@ -4404,8 +4439,14 @@ export class MindmapView extends ItemView {
     this.nodeLinkInputEl.value = isRootLinkDisabled ? "" : node.linkTarget ?? "";
     this.nodeLinkInputEl.disabled = isRootLinkDisabled;
     this.nodeLinkInputEl.toggleClass("is-readonly", isRootLinkDisabled);
-    this.nodeLinkInputEl.placeholder = isRootLinkDisabled ? "root 根节点不支持链接" : "输入链接目标：导图或笔记路径";
+    this.nodeLinkInputEl.placeholder = isRootLinkDisabled ? "root 根节点不支持链接" : "主链接目标：导图或笔记路径";
     this.nodeLinkInputEl.setAttribute("aria-readonly", isRootLinkDisabled ? "true" : "false");
+    this.nodeLinkAddButtonEl.disabled = isRootLinkDisabled;
+    this.nodeLinkAddButtonEl.toggleClass("is-disabled", isRootLinkDisabled);
+    if (!isRootLinkDisabled && (!node.links || node.links.length === 0) && node.linkTarget?.trim()) {
+      node.links = [{ id: crypto.randomUUID(), label: "链接", target: node.linkTarget.trim() }];
+    }
+    this.renderNodeLinkList(node);
     this.updateNodeLinkActionButton(isRootLinkDisabled ? "" : node.linkTarget ?? "");
     this.setNoteEditorValue(node.note ?? "");
     this.noteInputEl.value = node.note ?? "";
@@ -4473,11 +4514,131 @@ export class MindmapView extends ItemView {
     return true;
   }
 
+  private getNodeLinks(node: MindmapNode): MindmapNodeLink[] {
+    const links = [...(node.links ?? [])]
+      .map((link) => ({ ...link, target: link.target.trim(), label: link.label.trim() }))
+      .filter((link) => link.target.length > 0);
+    const legacyTarget = node.linkTarget?.trim() ?? "";
+    if (legacyTarget && !links.some((link) => link.target === legacyTarget)) {
+      links.unshift({ id: "legacy", label: "链接", target: legacyTarget });
+    }
+    return links;
+  }
+
+  private syncNodeLegacyLinkTarget(node: MindmapNode): void {
+    const firstLink = (node.links ?? []).find((link) => link.target.trim().length > 0);
+    node.linkTarget = firstLink?.target.trim() ?? "";
+  }
+
+  private renderNodeLinkList(node: MindmapNode): void {
+    if (!this.nodeLinkListEl) {
+      return;
+    }
+    this.nodeLinkListEl.empty();
+    const isRootLinkDisabled = this.isRootMindmapRootNode(node);
+    this.nodeLinkListEl.toggleClass("is-disabled", isRootLinkDisabled);
+    const links = node.links ?? [];
+    links.forEach((link, index) => {
+      const rowEl = this.nodeLinkListEl.createDiv({ cls: "mindmap-node-link-row" });
+      const labelInputEl = rowEl.createEl("input", { cls: "mindmap-node-link-label-input", type: "text", value: link.label });
+      labelInputEl.placeholder = "说明";
+      labelInputEl.disabled = isRootLinkDisabled;
+      const targetInputEl = rowEl.createEl("input", { cls: "mindmap-node-link-target-input", type: "text", value: link.target });
+      targetInputEl.placeholder = "链接目标";
+      targetInputEl.disabled = isRootLinkDisabled;
+      const jumpButtonEl = rowEl.createEl("button", { cls: "mindmap-node-link-row-jump", text: "跳转" });
+      jumpButtonEl.type = "button";
+      jumpButtonEl.disabled = isRootLinkDisabled || link.target.trim().length === 0;
+      const deleteButtonEl = rowEl.createEl("button", { cls: "mindmap-node-link-row-delete", text: "×" });
+      deleteButtonEl.type = "button";
+      deleteButtonEl.disabled = isRootLinkDisabled;
+      const commit = (): void => {
+        if (isRootLinkDisabled || !this.doc) {
+          return;
+        }
+        if (!this.linkHistoryCapturedForSession) {
+          this.captureHistorySnapshot();
+          this.linkHistoryCapturedForSession = true;
+        }
+        link.label = labelInputEl.value.trim();
+        link.target = targetInputEl.value.trim();
+        this.syncNodeLegacyLinkTarget(node);
+        this.updateNodeLinkActionButton(node.linkTarget ?? "");
+        this.requestSave();
+        this.renderMindmap();
+      };
+      labelInputEl.addEventListener("input", commit);
+      targetInputEl.addEventListener("input", () => {
+        commit();
+        jumpButtonEl.disabled = targetInputEl.value.trim().length === 0;
+      });
+      jumpButtonEl.addEventListener("click", () => {
+        const target = link.target.trim();
+        if (target) {
+          void this.openLinkedTarget(target);
+        }
+      });
+      deleteButtonEl.addEventListener("click", () => {
+        if (isRootLinkDisabled) {
+          return;
+        }
+        this.captureHistorySnapshot();
+        links.splice(index, 1);
+        node.links = links;
+        this.syncNodeLegacyLinkTarget(node);
+        this.renderNodeLinkList(node);
+        this.updateNodeLinkActionButton(node.linkTarget ?? "");
+        this.requestSave();
+        this.renderMindmap();
+      });
+    });
+  }
+
+  private addNodeLink(node: MindmapNode): void {
+    if (this.isRootMindmapRootNode(node)) {
+      return;
+    }
+    if (!node.links) {
+      const legacyTarget = node.linkTarget?.trim() ?? "";
+      node.links = legacyTarget ? [{ id: crypto.randomUUID(), label: "链接", target: legacyTarget }] : [];
+    }
+    this.captureHistorySnapshot();
+    node.links.push({ id: crypto.randomUUID(), label: "", target: "" });
+    this.renderNodeLinkList(node);
+    this.requestSave();
+  }
+
+  private async openNodeLinks(node: MindmapNode, event?: MouseEvent): Promise<void> {
+    const links = this.getNodeLinks(node);
+    if (links.length === 0) {
+      return;
+    }
+    if (links.length === 1) {
+      await this.openLinkedTarget(links[0].target);
+      return;
+    }
+    const menu = new Menu();
+    links.forEach((link, index) => {
+      menu.addItem((item) => {
+        item.setTitle(link.label || link.target || `链接 ${index + 1}`);
+        item.onClick(() => {
+          void this.openLinkedTarget(link.target);
+        });
+      });
+    });
+    if (event) {
+      menu.showAtMouseEvent(event);
+    } else {
+      menu.showAtPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    }
+  }
+
   private updateNodeLinkActionButton(linkTarget: string): void {
     if (!this.nodeLinkActionButtonEl) {
       return;
     }
-    const hasLink = linkTarget.trim().length > 0;
+    const selectedNode = this.doc && this.selectedNodeId ? findNodeById(this.doc, this.selectedNodeId) : null;
+    const hasLink = selectedNode ? this.getNodeLinks(selectedNode).length > 0 : linkTarget.trim().length > 0;
     this.nodeLinkActionButtonEl.disabled = !hasLink;
     this.nodeLinkActionButtonEl.toggleClass("is-disabled", !hasLink);
     this.nodeLinkActionButtonEl.setAttribute("aria-disabled", hasLink ? "false" : "true");
@@ -4491,7 +4652,7 @@ export class MindmapView extends ItemView {
     }
     const selectedNode = this.doc && this.selectedNodeId ? findNodeById(this.doc, this.selectedNodeId) : null;
     const canDelete = !!selectedNode && this.doc?.root.id !== selectedNode.id;
-    const hasLink = !!selectedNode?.linkTarget?.trim();
+    const hasLink = !!selectedNode && this.getNodeLinks(selectedNode).length > 0;
     const canUndo = this.undoStack.length > 0;
     const canRedo = this.redoStack.length > 0;
 
@@ -4756,6 +4917,75 @@ export class MindmapView extends ItemView {
     });
   }
 
+  private escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  private applyNoteSearchHighlight(): void {
+    if (!this.notePreviewEl || !this.noteSearchInputEl) {
+      return;
+    }
+    this.notePreviewEl.querySelectorAll("mark.mindmap-note-search-match").forEach((markEl) => {
+      markEl.replaceWith(document.createTextNode(markEl.textContent ?? ""));
+    });
+    this.notePreviewEl.normalize();
+    const query = this.noteSearchInputEl.value.trim();
+    if (!query) {
+      return;
+    }
+    if (this.noteSurfaceEl?.hasClass("is-editing") && this.noteEditorView) {
+      const markdown = this.noteEditorView.state.doc.toString();
+      const index = markdown.toLowerCase().indexOf(query.toLowerCase());
+      if (index >= 0) {
+        this.noteEditorView.dispatch({
+          selection: { anchor: index, head: index + query.length },
+          scrollIntoView: true
+        });
+        this.noteEditorView.focus();
+      }
+      return;
+    }
+    const regex = new RegExp(this.escapeRegExp(query), "gi");
+    const walker = document.createTreeWalker(this.notePreviewEl, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => {
+        const parent = node.parentElement;
+        if (!parent || parent.closest("script, style, textarea, input, mark.mindmap-note-search-match")) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        regex.lastIndex = 0;
+        return regex.test(node.textContent ?? "") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    const textNodes: Text[] = [];
+    while (walker.nextNode()) {
+      textNodes.push(walker.currentNode as Text);
+    }
+    const matchEls: HTMLElement[] = [];
+    textNodes.forEach((textNode) => {
+      const text = textNode.textContent ?? "";
+      regex.lastIndex = 0;
+      const fragment = document.createDocumentFragment();
+      let lastIndex = 0;
+      for (const match of text.matchAll(regex)) {
+        const index = match.index ?? 0;
+        if (index > lastIndex) {
+          fragment.appendChild(document.createTextNode(text.slice(lastIndex, index)));
+        }
+        const markEl = document.createElement("mark");
+        markEl.className = "mindmap-note-search-match";
+        markEl.textContent = match[0];
+        matchEls.push(markEl);
+        fragment.appendChild(markEl);
+        lastIndex = index + match[0].length;
+      }
+      if (lastIndex < text.length) {
+        fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+      }
+      textNode.replaceWith(fragment);
+    });
+    matchEls[0]?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
   private async renderMarkdown(markdown: string): Promise<void> {
     this.notePreviewEl.empty();
     this.notePreviewEl.dataset.sourceMarkdown = markdown;
@@ -4859,6 +5089,7 @@ export class MindmapView extends ItemView {
     // Highlight commented text in preview mode - DISABLED: Using footnote markers instead
     // The footnote markers are rendered by prepareMarkdownForPreview as mindmap-footnote-marker
     console.log('[DEBUG] Skipping highlightCommentedText - using footnote markers instead');
+    this.applyNoteSearchHighlight();
     /*
     window.setTimeout(() => {
       console.log('[DEBUG] Executing highlightCommentedText');
@@ -7500,8 +7731,8 @@ export class MindmapView extends ItemView {
 
   private openNodeMenu(event: MouseEvent, nodeId: string): void {
     const node = this.doc ? findNodeById(this.doc, nodeId) : null;
-    const linkTarget = node?.linkTarget?.trim() ?? "";
-    const hasLink = linkTarget.length > 0;
+    const links = node ? this.getNodeLinks(node) : [];
+    const hasLink = links.length > 0;
     const menu = new Menu();
     menu.addItem((item) => {
       item.setTitle("查看").setIcon("file-text").onClick(() => {
@@ -7557,7 +7788,9 @@ export class MindmapView extends ItemView {
     if (hasLink) {
       menu.addItem((item) => {
         item.setTitle("跳转").setIcon("arrow-up-right").onClick(() => {
-          void this.openLinkedTarget(linkTarget);
+          if (node) {
+            void this.openNodeLinks(node);
+          }
         });
       });
     }
@@ -7586,8 +7819,10 @@ export class MindmapView extends ItemView {
       return;
     }
     node.linkTarget = "";
+    node.links = [];
     if (this.selectedNodeId === nodeId) {
       this.nodeLinkInputEl.value = "";
+      this.renderNodeLinkList(node);
       this.updateNodeLinkActionButton("");
     }
     this.updateMobileActionButtons();
