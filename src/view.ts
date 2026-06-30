@@ -694,6 +694,11 @@ export class MindmapView extends ItemView {
   private nodeLinkClearButtonEl!: HTMLButtonElement;
   private noteSurfaceEl!: HTMLDivElement;
   private noteEditorHostEl!: HTMLDivElement;
+  private noteEditingMediaPreviewEl!: HTMLDivElement;
+  private noteMediaPopoverEl: HTMLDivElement | null = null;
+  private noteMediaPopoverHideTimer: number | null = null;
+  private noteMediaPopoverDragged = false;
+  private noteMediaPopoverDrag: { pointerId: number; offsetX: number; offsetY: number } | null = null;
   private noteSelectionToolbarEl!: HTMLDivElement;
   private editModeButtonEls: HTMLElement[] = [];
   private commonButtonEls: HTMLElement[] = [];
@@ -2722,6 +2727,7 @@ export class MindmapView extends ItemView {
     } else {
       this.noteEditorHostEl.addClass("is-hidden");
     }
+    this.noteEditingMediaPreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-editing-media-preview is-empty" });
     this.notePreviewEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-preview markdown-preview-view" });
     this.notePreviewEl.addEventListener("copy", (event) => this.handleNotePreviewCopy(event));
     // Removed double-click handler to prevent toggling between edit/preview modes
@@ -2790,6 +2796,7 @@ export class MindmapView extends ItemView {
         this.noteHistoryCapturedForSession = true;
       }
       node.note = this.noteInputEl.value;
+      this.renderNoteEditingMediaPreview(node.note ?? "");
       this.scheduleMarkdownRender(node.note ?? "");
       this.requestSave();
     });
@@ -2904,6 +2911,9 @@ export class MindmapView extends ItemView {
       this.pendingRenderFrame = null;
     }
     this.cancelPendingMarkdownRender();
+    this.hideNoteMediaPopover();
+    this.noteMediaPopoverEl?.remove();
+    this.noteMediaPopoverEl = null;
     this.noteEditorView?.destroy();
     this.noteEditorView = null;
     await this.flushSave();
@@ -4399,6 +4409,7 @@ export class MindmapView extends ItemView {
     this.updateNodeLinkActionButton(isRootLinkDisabled ? "" : node.linkTarget ?? "");
     this.setNoteEditorValue(node.note ?? "");
     this.noteInputEl.value = node.note ?? "";
+    this.renderNoteEditingMediaPreview(node.note ?? "");
     this.cancelPendingMarkdownRender();
     await this.renderMarkdown(node.note ?? "");
     this.setNoteEditing(false);
@@ -4711,6 +4722,40 @@ export class MindmapView extends ItemView {
     return distToLast <= distToNext ? lastNewline + 1 : nextNewline + 1;
   }
 
+  private enhanceRenderedNoteMedia(): void {
+    const processedLinks = new Set<HTMLAnchorElement>();
+    this.notePreviewEl.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((linkEl) => {
+      if (processedLinks.has(linkEl)) {
+        return;
+      }
+      const href = linkEl.getAttribute("href") ?? "";
+      const label = linkEl.textContent?.trim() || href;
+      const item = this.getNoteMediaItemFromTarget(href, label);
+      if (!item || item.type === "image") {
+        return;
+      }
+      processedLinks.add(linkEl);
+      const embedEl = document.createElement("div");
+      embedEl.className = `mindmap-note-preview-media is-${item.type}`;
+      const mediaEl = document.createElement(item.type === "video" ? "video" : "iframe");
+      mediaEl.setAttribute("src", item.src);
+      if (mediaEl instanceof HTMLVideoElement) {
+        mediaEl.controls = true;
+        mediaEl.preload = "metadata";
+        mediaEl.setAttribute("playsinline", "true");
+      } else {
+        mediaEl.setAttribute("allow", "encrypted-media; picture-in-picture");
+        mediaEl.setAttribute("allowfullscreen", "true");
+      }
+      embedEl.appendChild(mediaEl);
+      const captionEl = document.createElement("div");
+      captionEl.className = "mindmap-note-preview-media-caption";
+      captionEl.textContent = item.label;
+      embedEl.appendChild(captionEl);
+      linkEl.replaceWith(embedEl);
+    });
+  }
+
   private async renderMarkdown(markdown: string): Promise<void> {
     this.notePreviewEl.empty();
     this.notePreviewEl.dataset.sourceMarkdown = markdown;
@@ -4731,6 +4776,7 @@ export class MindmapView extends ItemView {
     console.log('[DEBUG] Footnote markers found in prepared markdown:', footnoteMarkers);
     
     await MarkdownRenderer.renderMarkdown(prepared, this.notePreviewEl, this.file?.path ?? "", this);
+    this.enhanceRenderedNoteMedia();
     
     // Check if footnote marker spans are present after rendering
     const renderedFootnoteSpans = this.notePreviewEl.querySelectorAll('span.mindmap-footnote-marker');
@@ -5357,13 +5403,9 @@ export class MindmapView extends ItemView {
           console.log('[DEBUG] Found footnote at position:', position);
           
           // Scroll to the position
-          this.noteEditorView.dispatch({
-            effects: [
-              this.noteEditorView.scrollDOM.scrollTo({ 
-                top: this.getPositionScrollTop(position),
-                behavior: 'smooth'
-              })
-            ]
+          this.noteEditorView.scrollDOM.scrollTo({
+            top: this.getPositionScrollTop(position),
+            behavior: 'smooth'
           });
           
           // Select the footnote marker
@@ -5594,6 +5636,267 @@ export class MindmapView extends ItemView {
     });
   }
 
+  private getNoteMediaResourceUrl(rawTarget: string): string | null {
+    const target = rawTarget.trim().replace(/^<|>$/g, "");
+    if (!target) {
+      return null;
+    }
+    if (/^BV[a-zA-Z0-9]{8,}$/.test(target)) {
+      return `https://www.bilibili.com/video/${target}`;
+    }
+    if (/^https?:\/\//i.test(target) || target.startsWith("data:")) {
+      return target;
+    }
+    const normalizedTarget = normalizePath(decodeURIComponent(target.split("#")[0] ?? target));
+    const file = this.app.metadataCache.getFirstLinkpathDest(normalizedTarget, this.file?.path ?? "")
+      ?? this.app.vault.getAbstractFileByPath(normalizedTarget);
+    if (file instanceof TFile) {
+      return this.app.vault.getResourcePath(file);
+    }
+    return null;
+  }
+
+  private getVideoEmbedUrl(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname.includes("youtube.com")) {
+        const videoId = parsed.searchParams.get("v");
+        return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+      }
+      if (parsed.hostname === "youtu.be") {
+        const videoId = parsed.pathname.replace(/^\//, "");
+        return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+      }
+      if (parsed.hostname.includes("vimeo.com")) {
+        const videoId = parsed.pathname.split("/").filter(Boolean)[0];
+        return videoId ? `https://player.vimeo.com/video/${videoId}` : null;
+      }
+      if (parsed.hostname.includes("bilibili.com") || parsed.hostname === "b23.tv") {
+        const bvid = /\/(?:video\/)?(BV[a-zA-Z0-9]+)/.exec(parsed.pathname)?.[1];
+        const aid = /\/(?:video\/)?av(\d+)/i.exec(parsed.pathname)?.[1];
+        const page = parsed.searchParams.get("p") ?? "1";
+        if (bvid) {
+          return `https://player.bilibili.com/player.html?bvid=${encodeURIComponent(bvid)}&page=${encodeURIComponent(page)}&autoplay=0`;
+        }
+        if (aid) {
+          return `https://player.bilibili.com/player.html?aid=${encodeURIComponent(aid)}&page=${encodeURIComponent(page)}&autoplay=0`;
+        }
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  private getNoteMediaItemFromTarget(rawTarget: string, label = rawTarget): { type: "image" | "video" | "embed"; src: string; label: string } | null {
+    const cleanedTarget = rawTarget.split("|")[0]?.trim() ?? "";
+    const src = this.getNoteMediaResourceUrl(cleanedTarget);
+    if (!src) {
+      return null;
+    }
+    const imageExt = /\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?|#|$)/i;
+    const videoExt = /\.(mp4|webm|mov|m4v|ogv)(\?|#|$)/i;
+    const embedSrc = /^https?:\/\//i.test(src) ? this.getVideoEmbedUrl(src) : null;
+    const type = embedSrc ? "embed" : videoExt.test(cleanedTarget) || videoExt.test(src) ? "video" : imageExt.test(cleanedTarget) || imageExt.test(src) ? "image" : null;
+    if (!type) {
+      return null;
+    }
+    return { type, src: embedSrc ?? src, label: label.trim() || cleanedTarget };
+  }
+
+  private extractNoteMediaItems(markdown: string): Array<{ type: "image" | "video" | "embed"; src: string; label: string }> {
+    const items: Array<{ type: "image" | "video" | "embed"; src: string; label: string }> = [];
+    const seen = new Set<string>();
+    const addItem = (rawTarget: string, label = rawTarget): void => {
+      const item = this.getNoteMediaItemFromTarget(rawTarget, label);
+      if (!item) {
+        return;
+      }
+      const key = `${item.type}:${item.src}`;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      items.push(item);
+    };
+
+    for (const match of markdown.matchAll(/!\[([^\]]*)\]\(([^\)]+)\)/g)) {
+      addItem(match[2], match[1] || match[2]);
+    }
+    for (const match of markdown.matchAll(/(^|[^!])\[([^\]]*)\]\(([^\)]+)\)/g)) {
+      addItem(match[3], match[2] || match[3]);
+    }
+    for (const match of markdown.matchAll(/!\[\[([^\]]+)\]\]/g)) {
+      addItem(match[1], match[1]);
+    }
+    for (const match of markdown.matchAll(/https?:\/\/[^\s)\]]+/g)) {
+      addItem(match[0], match[0]);
+    }
+    for (const match of markdown.matchAll(/\bBV[a-zA-Z0-9]{8,}\b/g)) {
+      addItem(`https://www.bilibili.com/video/${match[0]}`, match[0]);
+    }
+    return items;
+  }
+
+  private renderNoteEditingMediaPreview(markdown: string): void {
+    if (!this.noteEditingMediaPreviewEl) {
+      return;
+    }
+    this.noteEditingMediaPreviewEl.empty();
+    this.noteEditingMediaPreviewEl.addClass("is-empty");
+  }
+
+  private findNoteMediaItemAtEditorPosition(position: number): { type: "image" | "video" | "embed"; src: string; label: string } | null {
+    if (!this.noteEditorView) {
+      return null;
+    }
+    const line = this.noteEditorView.state.doc.lineAt(position);
+    const lineText = line.text;
+    const offset = position - line.from;
+    const scan = (regex: RegExp, targetIndex: number, labelIndex: number): { type: "image" | "video" | "embed"; src: string; label: string } | null => {
+      regex.lastIndex = 0;
+      for (const match of lineText.matchAll(regex)) {
+        const start = match.index ?? 0;
+        const end = start + match[0].length;
+        if (offset < start || offset > end) {
+          continue;
+        }
+        return this.getNoteMediaItemFromTarget(match[targetIndex], match[labelIndex] || match[targetIndex]);
+      }
+      return null;
+    };
+    return scan(/!\[([^\]]*)\]\(([^\)]+)\)/g, 2, 1)
+      ?? scan(/\[([^\]]*)\]\(([^\)]+)\)/g, 2, 1)
+      ?? scan(/!\[\[([^\]]+)\]\]/g, 1, 1)
+      ?? scan(/(https?:\/\/[^\s)\]]+)/g, 1, 1)
+      ?? scan(/\b(BV[a-zA-Z0-9]{8,})\b/g, 1, 1);
+  }
+
+  private clampNoteMediaPopoverPosition(left: number, top: number): { left: number; top: number } {
+    const popover = this.noteMediaPopoverEl;
+    const width = popover?.offsetWidth || 420;
+    const height = popover?.offsetHeight || 340;
+    return {
+      left: Math.max(12, Math.min(left, window.innerWidth - width - 12)),
+      top: Math.max(12, Math.min(top, window.innerHeight - height - 12))
+    };
+  }
+
+  private startNoteMediaPopoverDrag(event: PointerEvent): void {
+    if (!this.noteMediaPopoverEl || event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    const rect = this.noteMediaPopoverEl.getBoundingClientRect();
+    this.noteMediaPopoverDrag = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top
+    };
+    this.noteMediaPopoverDragged = true;
+    this.noteMediaPopoverEl.addClass("is-dragging");
+    this.noteMediaPopoverEl.setPointerCapture(event.pointerId);
+  }
+
+  private moveNoteMediaPopoverDrag(event: PointerEvent): void {
+    if (!this.noteMediaPopoverEl || !this.noteMediaPopoverDrag || event.pointerId !== this.noteMediaPopoverDrag.pointerId) {
+      return;
+    }
+    const next = this.clampNoteMediaPopoverPosition(
+      event.clientX - this.noteMediaPopoverDrag.offsetX,
+      event.clientY - this.noteMediaPopoverDrag.offsetY
+    );
+    this.noteMediaPopoverEl.style.left = `${next.left}px`;
+    this.noteMediaPopoverEl.style.top = `${next.top}px`;
+  }
+
+  private endNoteMediaPopoverDrag(event: PointerEvent): void {
+    if (!this.noteMediaPopoverEl || !this.noteMediaPopoverDrag || event.pointerId !== this.noteMediaPopoverDrag.pointerId) {
+      return;
+    }
+    this.noteMediaPopoverEl.releasePointerCapture(event.pointerId);
+    this.noteMediaPopoverEl.removeClass("is-dragging");
+    this.noteMediaPopoverDrag = null;
+  }
+
+  private showNoteMediaPopover(item: { type: "image" | "video" | "embed"; src: string; label: string }, clientX: number, clientY: number): void {
+    if (this.noteMediaPopoverHideTimer !== null) {
+      window.clearTimeout(this.noteMediaPopoverHideTimer);
+      this.noteMediaPopoverHideTimer = null;
+    }
+    if (!this.noteMediaPopoverEl) {
+      this.noteMediaPopoverEl = document.body.createDiv({ cls: "mindmap-note-media-popover" });
+      this.noteMediaPopoverEl.addEventListener("pointermove", (event) => this.moveNoteMediaPopoverDrag(event));
+      this.noteMediaPopoverEl.addEventListener("pointerup", (event) => this.endNoteMediaPopoverDrag(event));
+      this.noteMediaPopoverEl.addEventListener("pointercancel", (event) => this.endNoteMediaPopoverDrag(event));
+    }
+    this.noteMediaPopoverEl.empty();
+    const headerEl = this.noteMediaPopoverEl.createDiv({ cls: "mindmap-note-media-popover-header" });
+    headerEl.addEventListener("pointerdown", (event) => this.startNoteMediaPopoverDrag(event));
+    headerEl.createDiv({ cls: "mindmap-note-media-popover-title", text: "媒体预览" });
+    const closeButtonEl = headerEl.createEl("button", { cls: "mindmap-note-media-popover-close", text: "×" });
+    closeButtonEl.type = "button";
+    closeButtonEl.setAttribute("aria-label", "关闭媒体预览");
+    closeButtonEl.addEventListener("pointerdown", (event) => event.stopPropagation());
+    closeButtonEl.addEventListener("click", () => this.hideNoteMediaPopover());
+    const mediaEl = this.noteMediaPopoverEl.createDiv({ cls: `mindmap-note-media-popover-content is-${item.type}` });
+    if (item.type === "image") {
+      mediaEl.createEl("img", { attr: { src: item.src, alt: item.label } });
+    } else if (item.type === "video") {
+      const videoEl = mediaEl.createEl("video", { attr: { src: item.src, controls: "true", preload: "metadata" } });
+      videoEl.setAttribute("playsinline", "true");
+    } else {
+      mediaEl.createEl("iframe", { attr: { src: item.src, allow: "encrypted-media; picture-in-picture", allowfullscreen: "true" } });
+    }
+    this.noteMediaPopoverEl.createDiv({ cls: "mindmap-note-media-popover-label", text: item.label });
+    if (!this.noteMediaPopoverDragged) {
+      const next = this.clampNoteMediaPopoverPosition(clientX + 14, clientY + 14);
+      this.noteMediaPopoverEl.style.left = `${next.left}px`;
+      this.noteMediaPopoverEl.style.top = `${next.top}px`;
+    }
+    this.noteMediaPopoverEl.addClass("is-visible");
+  }
+
+  private hideNoteMediaPopoverSoon(): void {
+    if (this.noteMediaPopoverHideTimer !== null) {
+      window.clearTimeout(this.noteMediaPopoverHideTimer);
+    }
+    this.noteMediaPopoverHideTimer = window.setTimeout(() => {
+      this.noteMediaPopoverEl?.removeClass("is-visible");
+      this.noteMediaPopoverHideTimer = null;
+    }, 120);
+  }
+
+  private hideNoteMediaPopover(): void {
+    if (this.noteMediaPopoverHideTimer !== null) {
+      window.clearTimeout(this.noteMediaPopoverHideTimer);
+      this.noteMediaPopoverHideTimer = null;
+    }
+    this.noteMediaPopoverDrag = null;
+    this.noteMediaPopoverDragged = false;
+    this.noteMediaPopoverEl?.removeClass("is-dragging");
+    this.noteMediaPopoverEl?.removeClass("is-visible");
+  }
+
+  private handleNoteEditorMediaPeek(event: MouseEvent, force = false): boolean {
+    if (!this.noteEditorView) {
+      return false;
+    }
+    if (!force && !(event.metaKey || event.ctrlKey)) {
+      return false;
+    }
+    const position = this.noteEditorView.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (position === null) {
+      return false;
+    }
+    const item = this.findNoteMediaItemAtEditorPosition(position);
+    if (!item) {
+      return false;
+    }
+    this.showNoteMediaPopover(item, event.clientX, event.clientY);
+    return true;
+  }
+
   private createNoteEditor(): void {
     if (this.noteEditorView || !this.noteEditorHostEl) {
       return;
@@ -5607,9 +5910,27 @@ export class MindmapView extends ItemView {
       }
       this.handleNoteEditorInput(update.state.doc.toString());
     });
-    const pasteHandler = EditorView.domEventHandlers({
+    const editorMouseHandlers = EditorView.domEventHandlers({
       paste: (event) => {
         void this.handlePaste(event as ClipboardEvent);
+        return false;
+      },
+      mousemove: (event) => {
+        this.handleNoteEditorMediaPeek(event as MouseEvent);
+        return false;
+      },
+      click: (event) => {
+        const mouseEvent = event as MouseEvent;
+        if (!(mouseEvent.metaKey || mouseEvent.ctrlKey)) {
+          return false;
+        }
+        const handled = this.handleNoteEditorMediaPeek(mouseEvent, true);
+        if (handled) {
+          event.preventDefault();
+        }
+        return handled;
+      },
+      mouseleave: () => {
         return false;
       }
     });
@@ -5639,7 +5960,7 @@ export class MindmapView extends ItemView {
           closePreviewKeymap,
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
           updateListener,
-          pasteHandler,
+          editorMouseHandlers,
           EditorView.lineWrapping,
           EditorView.theme({
             "&": { height: "100%" },
@@ -5688,6 +6009,7 @@ export class MindmapView extends ItemView {
     }
     node.note = markdown;
     this.noteInputEl.value = markdown;
+    this.renderNoteEditingMediaPreview(markdown);
     this.scheduleMarkdownRender(node.note ?? "");
     this.requestSave();
   }
@@ -8165,6 +8487,7 @@ export class MindmapView extends ItemView {
     this.setNoteEditing(false);
     this.updateMobileActionClusterVisibility();
     this.hideCommentsPanel();
+    this.hideNoteMediaPopover();
   }
 
   private clearCanvasSelection(): void {

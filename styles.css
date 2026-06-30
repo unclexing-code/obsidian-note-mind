@@ -1398,6 +1398,136 @@
    transition: background 220ms ease;
  }
 
+ .mindmap-note-editing-media-preview {
+   display: none;
+ }
+
+ .mindmap-note-media-popover {
+   position: fixed;
+   z-index: 10000;
+   display: none;
+   width: min(420px, calc(100vw - 24px));
+   height: min(340px, calc(100vh - 24px));
+   min-width: 260px;
+   min-height: 190px;
+   max-width: calc(100vw - 24px);
+   max-height: calc(100vh - 24px);
+   overflow: hidden;
+   resize: both;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 12px;
+   background: var(--background-primary);
+   box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
+   padding: 8px;
+ }
+
+ .mindmap-note-media-popover.is-visible {
+   display: flex;
+   flex-direction: column;
+   gap: 6px;
+ }
+
+ .mindmap-note-media-popover-header {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 8px;
+   flex: 0 0 auto;
+   cursor: grab;
+   user-select: none;
+   touch-action: none;
+ }
+
+ .mindmap-note-media-popover.is-dragging .mindmap-note-media-popover-header {
+   cursor: grabbing;
+ }
+
+ .mindmap-note-media-popover-title {
+   min-width: 0;
+   color: var(--text-muted);
+   font-size: 12px;
+   font-weight: 800;
+   overflow: hidden;
+   text-overflow: ellipsis;
+   white-space: nowrap;
+ }
+
+ .mindmap-note-media-popover-close {
+   width: 24px;
+   height: 24px;
+   flex: 0 0 auto;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 999px;
+   background: var(--background-secondary);
+   color: var(--text-normal);
+   cursor: pointer;
+   line-height: 1;
+ }
+
+ .mindmap-note-media-popover-close:hover,
+ .mindmap-note-media-popover-close:focus-visible {
+   background: var(--background-modifier-hover);
+   outline: none;
+ }
+
+ .mindmap-note-media-popover-content {
+   min-height: 0;
+   flex: 1 1 auto;
+ }
+
+ .mindmap-note-media-popover-content img,
+ .mindmap-note-media-popover-content video,
+ .mindmap-note-media-popover-content iframe {
+   display: block;
+   width: 100%;
+   height: 100%;
+   border: 0;
+   border-radius: 8px;
+   object-fit: contain;
+   background: #000;
+ }
+
+ .mindmap-note-media-popover-content iframe {
+   object-fit: initial;
+ }
+
+ .mindmap-note-media-popover-label {
+   margin-top: 6px;
+   color: var(--text-muted);
+   font-size: 12px;
+   line-height: 1.35;
+   white-space: nowrap;
+   overflow: hidden;
+   text-overflow: ellipsis;
+ }
+
+ .mindmap-note-preview-media {
+   margin: 10px 0;
+   overflow: hidden;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 10px;
+   background: var(--background-secondary);
+ }
+
+ .mindmap-note-preview-media video,
+ .mindmap-note-preview-media iframe {
+   display: block;
+   width: 100%;
+   height: min(320px, 48vh);
+   border: 0;
+   background: #000;
+ }
+
+ .mindmap-note-preview-media-caption {
+   padding: 6px 8px;
+   color: var(--text-muted);
+   font-size: 12px;
+   line-height: 1.35;
+   white-space: nowrap;
+   overflow: hidden;
+   text-overflow: ellipsis;
+ }
+
  .mindmap-mobile-note-toolbar {
    display: flex;
    gap: 6px;
