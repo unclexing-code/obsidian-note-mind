@@ -1136,6 +1136,7 @@ class MindmapView extends obsidian_1.ItemView {
         this.mobileGlobalActionClusterEl?.addClass("is-expanded");
         this.mobileUndoButtonEl?.removeClass("is-hidden");
         this.mobileRedoButtonEl?.removeClass("is-hidden");
+        this.mobileSearchButtonEl?.removeClass("is-hidden");
         this.mobileRootButtonEl?.removeClass("is-hidden");
         this.mobileRootButtonEl?.removeAttribute("hidden");
         if (this.mobileRootButtonEl) {
@@ -2121,36 +2122,36 @@ class MindmapView extends obsidian_1.ItemView {
             nodes
                 .filter((node) => draggingIds.has(node.id))
                 .forEach((node) => {
-                const ghostPosition = dragGhostPositions.get(node.id);
-                if (!ghostPosition) {
-                    return;
-                }
-                const size = this.ensureNodeSize(node);
-                const ghostGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
-                ghostGroup.classList.add("mindmap-node-group", "is-drag-ghost");
-                ghostGroup.setAttribute("transform", `translate(${ghostPosition.x}, ${ghostPosition.y})`);
-                const ghostRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-                ghostRect.setAttribute("x", String(-size.width / 2));
-                ghostRect.setAttribute("y", String(-size.height / 2));
-                ghostRect.setAttribute("rx", node.id === this.doc?.root.id ? "16" : "10");
-                ghostRect.setAttribute("ry", node.id === this.doc?.root.id ? "16" : "10");
-                ghostRect.setAttribute("width", String(size.width));
-                ghostRect.setAttribute("height", String(size.height));
-                ghostRect.classList.add("mindmap-node", "is-drag-ghost");
-                ghostGroup.appendChild(ghostRect);
-                const ghostTitle = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
-                ghostTitle.setAttribute("x", String(-size.width / 2 + 10));
-                ghostTitle.setAttribute("y", String(-size.height / 2 + 6));
-                ghostTitle.setAttribute("width", String(size.width - 20));
-                ghostTitle.setAttribute("height", String(size.height - 12));
-                const ghostText = document.createElement("div");
-                ghostText.className = "mindmap-node-title is-drag-ghost";
-                ghostText.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
-                ghostText.textContent = node.title;
-                ghostTitle.appendChild(ghostText);
-                ghostGroup.appendChild(ghostTitle);
-                this.graphLayerEl.appendChild(ghostGroup);
-            });
+                    const ghostPosition = dragGhostPositions.get(node.id);
+                    if (!ghostPosition) {
+                        return;
+                    }
+                    const size = this.ensureNodeSize(node);
+                    const ghostGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+                    ghostGroup.classList.add("mindmap-node-group", "is-drag-ghost");
+                    ghostGroup.setAttribute("transform", `translate(${ghostPosition.x}, ${ghostPosition.y})`);
+                    const ghostRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                    ghostRect.setAttribute("x", String(-size.width / 2));
+                    ghostRect.setAttribute("y", String(-size.height / 2));
+                    ghostRect.setAttribute("rx", node.id === this.doc?.root.id ? "16" : "10");
+                    ghostRect.setAttribute("ry", node.id === this.doc?.root.id ? "16" : "10");
+                    ghostRect.setAttribute("width", String(size.width));
+                    ghostRect.setAttribute("height", String(size.height));
+                    ghostRect.classList.add("mindmap-node", "is-drag-ghost");
+                    ghostGroup.appendChild(ghostRect);
+                    const ghostTitle = document.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
+                    ghostTitle.setAttribute("x", String(-size.width / 2 + 10));
+                    ghostTitle.setAttribute("y", String(-size.height / 2 + 6));
+                    ghostTitle.setAttribute("width", String(size.width - 20));
+                    ghostTitle.setAttribute("height", String(size.height - 12));
+                    const ghostText = document.createElement("div");
+                    ghostText.className = "mindmap-node-title is-drag-ghost";
+                    ghostText.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+                    ghostText.textContent = node.title;
+                    ghostTitle.appendChild(ghostText);
+                    ghostGroup.appendChild(ghostTitle);
+                    this.graphLayerEl.appendChild(ghostGroup);
+                });
         }
         const nodesToRender = draggingIds
             ? [
@@ -2923,10 +2924,10 @@ class MindmapView extends obsidian_1.ItemView {
             .filter((file) => this.isMindmapFile(file))
             .sort((a, b) => a.path.localeCompare(b.path, undefined, { sensitivity: "base" }))
             .map((file) => ({
-            file,
-            title: file.basename.replace(/\.mindmap$/i, ""),
-            obsidianUrl: this.getMindmapObsidianUrl(file)
-        }));
+                file,
+                title: file.basename.replace(/\.mindmap$/i, ""),
+                obsidianUrl: this.getMindmapObsidianUrl(file)
+            }));
     }
     getNextMindmapPath(folderPath, baseName) {
         let index = 0;

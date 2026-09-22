@@ -328,7 +328,7 @@ class MindmapAiGenerateModal extends Modal {
 class CommentModal {
   private textareaEl!: HTMLTextAreaElement;
   private overlayEl: HTMLElement | null = null;
-  
+
   constructor(
     private readonly app: App,
     private readonly selectedText: string,
@@ -342,28 +342,28 @@ class CommentModal {
       this.createMobileModal();
       return;
     }
-    
+
     // PC version - use Obsidian Modal
     const modal = new (class extends Modal {
       private textareaEl!: HTMLTextAreaElement;
-      
+
       constructor(app: App, private selectedText: string, private onSubmit: (comment: string) => void) {
         super(app);
       }
-      
+
       onOpen(): void {
         const { contentEl } = this;
         contentEl.empty();
         contentEl.addClass("mindmap-comment-modal");
-        
+
         contentEl.createEl("h2", { text: "添加评论" });
-        
+
         // Show quoted text
         if (this.selectedText) {
           const quoteEl = contentEl.createDiv({ cls: "mindmap-comment-quote-preview" });
           quoteEl.setText(`"${this.selectedText}"`);
         }
-        
+
         // Textarea for comment input
         this.textareaEl = contentEl.createEl("textarea", {
           cls: "mindmap-comment-input",
@@ -371,16 +371,16 @@ class CommentModal {
             placeholder: "输入评论内容（支持 Markdown）..."
           }
         });
-        
+
         // Action buttons
         const buttonContainer = contentEl.createDiv({ cls: "mindmap-comment-actions" });
-        
+
         const cancelBtn = buttonContainer.createEl("button", { text: "取消" });
         cancelBtn.type = "button";
         cancelBtn.addEventListener("click", () => {
           this.close();
         });
-        
+
         const submitBtn = buttonContainer.createEl("button", { text: "提交", cls: "mod-cta" });
         submitBtn.type = "button";
         submitBtn.addEventListener("click", () => {
@@ -392,7 +392,7 @@ class CommentModal {
           this.onSubmit(comment);
           this.close();
         });
-        
+
         // Submit on Ctrl/Cmd + Enter
         this.textareaEl.addEventListener("keydown", (event) => {
           if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -406,28 +406,28 @@ class CommentModal {
             this.close();
           }
         });
-        
+
         window.setTimeout(() => {
           this.textareaEl.focus();
         }, 0);
       }
-      
+
       onClose(): void {
         this.contentEl.empty();
       }
     })(this.app, this.selectedText, this.onSubmit);
-    
+
     modal.open();
   }
 
   private createMobileModal(): void {
     console.log('[Mobile CommentModal] Creating independent modal');
-    
+
     // Create overlay with high z-index - no center alignment to avoid keyboard overlap
     const overlay = document.createElement("div");
     overlay.className = "mindmap-comment-modal-overlay";
     overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;flex-direction:column;pointer-events:auto;";
-    
+
     // Create modal container - positioned at top to avoid keyboard
     const modal = document.createElement("div");
     modal.className = "mindmap-comment-modal-container";
@@ -436,7 +436,7 @@ class CommentModal {
     const closeBtn = document.createElement("div");
     closeBtn.innerHTML = "×";
     closeBtn.style.cssText = "position:absolute;top:12px;right:12px;width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:28px;color:#666;cursor:pointer;border-radius:50%;background:rgba(0,0,0,0.05);pointer-events:auto;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);z-index:10002;min-width:44px;min-height:44px;";
-    closeBtn.onclick = function(e) {
+    closeBtn.onclick = function (e) {
       e?.preventDefault();
       e?.stopPropagation();
       console.log('[Mobile CommentModal] Close button clicked via onclick');
@@ -451,13 +451,13 @@ class CommentModal {
       overlay.remove();
     }, { capture: true });
     modal.appendChild(closeBtn);
-    
+
     // Title
     const titleEl = document.createElement("h2");
     titleEl.textContent = "添加评论";
     titleEl.style.cssText = "margin:0 0 16px 0;font-size:20px;color:#333;pointer-events:auto;padding-right:44px;";
     modal.appendChild(titleEl);
-    
+
     // Show quoted text
     if (this.selectedText) {
       const quoteEl = document.createElement("div");
@@ -466,14 +466,14 @@ class CommentModal {
       quoteEl.style.cssText = "margin-bottom:16px;padding:12px;background:#f5f5f5;border-left:3px solid #7c3aed;border-radius:4px;font-size:14px;color:#666;pointer-events:auto;max-height:100px;overflow-y:auto;-webkit-overflow-scrolling:touch;";
       modal.appendChild(quoteEl);
     }
-    
+
     // Textarea for comment input - 16px font to prevent iOS zoom
     this.textareaEl = document.createElement("textarea");
     this.textareaEl.id = "mobile-comment-textarea";
     this.textareaEl.placeholder = "输入评论内容（支持 Markdown）...";
     this.textareaEl.style.cssText = "width:100%;min-height:150px;padding:12px;font-size:16px;border:1px solid #ddd;border-radius:6px;resize:vertical;margin-bottom:16px;pointer-events:auto;touch-action:manipulation;box-sizing:border-box;-webkit-overflow-scrolling:touch;";
     this.textareaEl.setAttribute("autofocus", "");
-    
+
     // Add focus/blur listeners for debugging
     this.textareaEl.addEventListener("focus", () => {
       console.log('[Mobile CommentModal] ✅ Textarea获得焦点');
@@ -481,25 +481,25 @@ class CommentModal {
     this.textareaEl.addEventListener("blur", () => {
       console.log('[Mobile CommentModal] ❌ Textarea失去焦点');
     });
-    
+
     modal.appendChild(this.textareaEl);
-    
+
     // Buttons container with sticky positioning at bottom
     const btnContainer = document.createElement("div");
     btnContainer.style.cssText = "display:flex;gap:12px;justify-content:flex-end;pointer-events:auto;position:sticky;bottom:0;background:white;padding-top:12px;padding-bottom:env(safe-area-inset-bottom, 20px);border-top:1px solid #eee;margin-top:auto;";
-    
+
     const cancelBtn = document.createElement("div");
     cancelBtn.textContent = "取消";
     cancelBtn.style.cssText = "padding:12px 24px;font-size:16px;border:1px solid #ddd;border-radius:6px;background:white;cursor:pointer;min-height:44px;min-width:80px;pointer-events:auto;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);text-align:center;display:flex;align-items:center;justify-content:center;user-select:none;";
     // Use setAttribute for inline onclick - most reliable for mobile
     cancelBtn.setAttribute('onclick', 'console.log("[Mobile CommentModal] Cancel clicked via inline onclick"); new Notice("✅ 取消按钮被点击"); this.closest(".mindmap-comment-modal-overlay").remove();');
-    
+
     const submitBtn = document.createElement("div");
     submitBtn.textContent = "提交";
     submitBtn.style.cssText = "padding:12px 24px;font-size:16px;border:none;border-radius:6px;background:#7c3aed;color:white;cursor:pointer;min-height:44px;min-width:80px;pointer-events:auto;touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,0,0,0.1);text-align:center;display:flex;align-items:center;justify-content:center;user-select:none;";
     // Use setAttribute for inline onclick - most reliable for mobile
     submitBtn.setAttribute('onclick', '(function(btn) { console.log("[Mobile CommentModal] Submit clicked via inline onclick"); new Notice("🔵 提交按钮被点击"); var textarea = document.getElementById("mobile-comment-textarea"); var comment = textarea ? textarea.value.trim() : ""; if (!comment) { new Notice("❌ 评论内容不能为空"); return; } new Notice("✅ 提交: " + comment); btn.closest(".mindmap-comment-modal-overlay").remove(); })(this);');
-    
+
     // Also add event listeners with capture phase as backup
     cancelBtn.addEventListener("click", (e) => {
       console.log('[Mobile CommentModal] Cancel clicked via listener');
@@ -507,34 +507,34 @@ class CommentModal {
       e.stopPropagation();
       overlay.remove();
     }, { capture: true });
-    
+
     submitBtn.addEventListener("click", (e) => {
       console.log('[Mobile CommentModal] Submit clicked via listener');
       e.preventDefault();
       e.stopPropagation();
-      
+
       const textarea = document.getElementById('mobile-comment-textarea') as HTMLTextAreaElement;
       const comment = textarea?.value.trim();
-      
+
       if (!comment) {
         new Notice("❌ 评论内容不能为空");
         return;
       }
-      
+
       try {
         this.onSubmit(comment);
       } catch (error) {
         console.error('[Mobile CommentModal] onSubmit error:', error);
         new Notice('❌ onSubmit错误: ' + String(error));
       }
-      
+
       overlay.remove();
     }, { capture: true });
-    
+
     btnContainer.appendChild(cancelBtn);
     btnContainer.appendChild(submitBtn);
     modal.appendChild(btnContainer);
-    
+
     // Close on background click
     overlay.onclick = (e) => {
       if (e.target === overlay) {
@@ -542,14 +542,14 @@ class CommentModal {
         overlay.remove();
       }
     };
-    
+
     // Store reference
     this.overlayEl = overlay;
-    
+
     // Add modal to overlay, then add overlay to body
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
-    
+
     // Focus textarea with multiple attempts
     setTimeout(() => {
       this.textareaEl.focus();
@@ -564,14 +564,14 @@ class CommentModal {
       this.textareaEl.focus();
       console.log('[Mobile CommentModal] Attempting to focus textarea (1)');
     }, 100);
-    
+
     setTimeout(() => {
       if (document.activeElement !== this.textareaEl) {
         this.textareaEl.focus();
         console.log('[Mobile CommentModal] Attempting to focus textarea (2)');
       }
     }, 300);
-    
+
     console.log('[Mobile CommentModal] Modal created successfully');
   }
 
@@ -599,33 +599,33 @@ class TextSelectionModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("mindmap-text-selection-modal");
-    
+
     contentEl.createEl("h2", { text: `找到 ${this.occurrences.length} 处匹配的文本` });
-    
+
     const descriptionEl = contentEl.createDiv({ cls: "mindmap-text-selection-description" });
     descriptionEl.setText("请选择要评论的位置：");
-    
+
     // Create selection list
     const listEl = contentEl.createDiv({ cls: "mindmap-text-selection-list" });
-    
+
     this.occurrences.forEach((pos, idx) => {
       const before = this.nodeNote.substring(Math.max(0, pos - 30), pos);
       const after = this.nodeNote.substring(pos + this.selectedText.length, Math.min(this.nodeNote.length, pos + this.selectedText.length + 30));
-      
+
       const itemEl = listEl.createDiv({ cls: "mindmap-text-selection-item" });
       itemEl.dataset.index = idx.toString();
-      
+
       const previewEl = itemEl.createDiv({ cls: "mindmap-text-selection-preview" });
       // Escape HTML to prevent XSS and ensure proper rendering
       const escapeHtml = (unsafe: string) => unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
       previewEl.innerHTML = `...${escapeHtml(before)}<strong>[${escapeHtml(this.selectedText)}]</strong>${escapeHtml(after)}...`;
-      
+
       itemEl.addEventListener("click", () => {
         this.onSelect(idx);
         this.close();
       });
     });
-    
+
     // Cancel button
     const buttonContainer = contentEl.createDiv({ cls: "mindmap-text-selection-actions" });
     const cancelBtn = buttonContainer.createEl("button", { text: "取消" });
@@ -706,7 +706,7 @@ export class MindmapView extends ItemView {
   private editModeButtonEls: HTMLElement[] = [];
   private commonButtonEls: HTMLElement[] = [];
   private noteCommentsPanelEl!: HTMLDivElement;
-  private editingCommentId: string | null = null; 
+  private editingCommentId: string | null = null;
   private noteEditorView: EditorView | null = null;
   private isSyncingNoteEditor = false;
   private noteRenderTimer: number | null = null;
@@ -1503,6 +1503,7 @@ export class MindmapView extends ItemView {
     this.mobileUndoButtonEl?.removeClass("is-hidden");
     this.mobileRedoButtonEl?.removeClass("is-hidden");
     this.mobileRootButtonEl?.removeClass("is-hidden");
+    this.mobileSearchButtonEl?.removeClass("is-hidden");
     this.mobileRootButtonEl?.removeAttribute("hidden");
     if (this.mobileRootButtonEl) {
       this.mobileRootButtonEl.disabled = false;
@@ -1520,6 +1521,7 @@ export class MindmapView extends ItemView {
     this.mobileUndoButtonEl?.addClass("is-hidden");
     this.mobileRedoButtonEl?.addClass("is-hidden");
     this.mobileRootButtonEl?.addClass("is-hidden");
+    this.mobileSearchButtonEl?.addClass("is-hidden");
   }
 
   private startMobileGlobalActionsLongPress(): void {
@@ -1661,19 +1663,19 @@ export class MindmapView extends ItemView {
       return;
     }
     const target = event.target;
-    
+
     // Skip all processing for comment modal - let it handle its own events
     if (target instanceof Element && target.closest(".mindmap-comment-modal-overlay, .mindmap-comment-modal-container")) {
       console.log('[Global Touch] Comment modal detected, skipping touchstart handler');
       return;
     }
-    
+
     // Skip all processing for text selection modal - let it handle its own events
     if (target instanceof Element && target.closest(".mindmap-text-selection-modal")) {
       console.log('[Global Touch] Text selection modal detected, skipping touchstart handler');
       return;
     }
-    
+
     if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
       event.stopPropagation();
       return;
@@ -1695,19 +1697,19 @@ export class MindmapView extends ItemView {
       return;
     }
     const target = event.target;
-    
+
     // Skip all processing for comment modal - let it handle its own events
     if (target instanceof Element && target.closest(".mindmap-comment-modal-overlay, .mindmap-comment-modal-container")) {
       console.log('[Global Touch] Comment modal detected, skipping touchmove handler');
       return;
     }
-    
+
     // Skip all processing for text selection modal - let it handle its own events
     if (target instanceof Element && target.closest(".mindmap-text-selection-modal")) {
       console.log('[Global Touch] Text selection modal detected, skipping touchmove handler');
       return;
     }
-    
+
     if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
       event.stopPropagation();
       return;
@@ -1729,19 +1731,19 @@ export class MindmapView extends ItemView {
       return;
     }
     const target = event.target;
-    
+
     // Skip all processing for comment modal - let it handle its own events
     if (target instanceof Element && target.closest(".mindmap-comment-modal-overlay, .mindmap-comment-modal-container")) {
       console.log('[Global Touch] Comment modal detected, skipping touchend handler');
       return;
     }
-    
+
     // Skip all processing for text selection modal - let it handle its own events
     if (target instanceof Element && target.closest(".mindmap-text-selection-modal")) {
       console.log('[Global Touch] Text selection modal detected, skipping touchend handler');
       return;
     }
-    
+
     if (this.isMobileNoteDrawerOpen() && target instanceof Element && target.closest(".mindmap-drawer")) {
       event.stopPropagation();
       return;
@@ -2424,7 +2426,7 @@ export class MindmapView extends ItemView {
       void this.redo();
     });
 
-    this.mobileSearchButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-search-button", text: "🔍" });
+    this.mobileSearchButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-search-button is-hidden", text: "🔍" });
     this.mobileSearchButtonEl.type = "button";
     this.mobileSearchButtonEl.title = "全局搜索导图";
     this.mobileSearchButtonEl.setAttribute("aria-label", "全局搜索导图");
@@ -2526,7 +2528,7 @@ export class MindmapView extends ItemView {
     // });
 
 
-        // Add comments panel toggle button
+    // Add comments panel toggle button
     this.commentsToggleBtn = drawerHeaderActionsEl.createEl("button", {
       cls: "mindmap-comments-toggle-btn-header",
       text: "💬"
@@ -2550,9 +2552,9 @@ export class MindmapView extends ItemView {
       const editing = !this.noteSurfaceEl.hasClass("is-editing");
       this.setNoteEditing(editing);
     });
-    
 
-    
+
+
     this.drawerCloseEl = drawerHeaderActionsEl.createEl("button", {
       cls: "mindmap-drawer-close",
       text: "关闭"
@@ -2701,16 +2703,16 @@ export class MindmapView extends ItemView {
       { label: "1.", title: "有序列表", action: "ordered-list" },
       { label: "•", title: "无序列表", action: "unordered-list" },
     ];
-    
+
     // Create simplified buttons for both modes (comment is always available)
     const commonButtons = [
       { label: "💬", title: "添加评论", action: "comment" }
     ];
-    
+
     // Store button references for mode switching
     this.editModeButtonEls = [];
     this.commonButtonEls = [];
-    
+
     // Add edit mode buttons (hidden by default in preview mode)
     editModeButtons.forEach((item) => {
       const button = this.noteSelectionToolbarEl.createEl("button", {
@@ -2739,9 +2741,9 @@ export class MindmapView extends ItemView {
         event.stopPropagation();
         if (buttonConfig.action === "comment") {
           this.handleAddComment();
-        } else {  
+        } else {
           this.applyNoteSelectionFormat(buttonConfig.action);
-        } 
+        }
       });
       this.commonButtonEls.push(buttonEl);
     });
@@ -2775,11 +2777,11 @@ export class MindmapView extends ItemView {
     this.noteTocEl.createEl("button", { cls: "mindmap-note-toc-fab", text: "目录" });
 
     this.noteInputEl.addEventListener("focus", () => {
-        this.noteCommentsPanelEl.classList.add("is-focused");
+      this.noteCommentsPanelEl.classList.add("is-focused");
     });
 
     this.noteInputEl.addEventListener("blur", () => {
-        this.noteCommentsPanelEl.classList.remove("is-focused");
+      this.noteCommentsPanelEl.classList.remove("is-focused");
     });
 
     // Add comments panel toggle button in top-right corner
@@ -4794,7 +4796,7 @@ export class MindmapView extends ItemView {
     // Try to find text content and map it back to markdown
     // Walk up to find a text-containing element
     let targetElement: Node | null = element instanceof HTMLElement ? element : element.parentElement;
-    
+
     // Find the deepest text node containing the click
     if (targetElement && targetElement.nodeType === Node.ELEMENT_NODE) {
       const range = document.caretRangeFromPoint?.(event.clientX, event.clientY);
@@ -4805,11 +4807,11 @@ export class MindmapView extends ItemView {
           NodeFilter.SHOW_TEXT,
           null
         );
-        
+
         let charCount = 0;
         let foundTarget = false;
         let node: Node | null;
-        
+
         while ((node = walker.nextNode())) {
           if (node === range.startContainer) {
             // Found the target text node, add offset within this node
@@ -4820,7 +4822,7 @@ export class MindmapView extends ItemView {
           // Add the length of this text node
           charCount += node.textContent?.length || 0;
         }
-        
+
         if (foundTarget && charCount < markdown.length) {
           // The preview text may differ from markdown due to formatting
           // Use ratio-based estimation as fallback but try to be more accurate
@@ -4829,7 +4831,7 @@ export class MindmapView extends ItemView {
             // Map preview position to markdown position using ratio
             const ratio = charCount / previewText.length;
             const estimatedPos = Math.floor(ratio * markdown.length);
-            
+
             // Snap to nearest word boundary or line
             const beforeText = markdown.substring(0, estimatedPos);
             const lastSpace = Math.max(
@@ -4839,10 +4841,10 @@ export class MindmapView extends ItemView {
             );
             const nextSpace = markdown.indexOf(' ', estimatedPos);
             const nextNewline = markdown.indexOf('\n', estimatedPos);
-            const nextBoundary = nextSpace === -1 ? nextNewline : 
-                                nextNewline === -1 ? nextSpace : 
-                                Math.min(nextSpace, nextNewline);
-            
+            const nextBoundary = nextSpace === -1 ? nextNewline :
+              nextNewline === -1 ? nextSpace :
+                Math.min(nextSpace, nextNewline);
+
             if (lastSpace !== -1 || nextBoundary !== -1) {
               const distToLast = lastSpace === -1 ? Infinity : estimatedPos - lastSpace - 1;
               const distToNext = nextBoundary === -1 ? Infinity : nextBoundary - estimatedPos;
@@ -4859,7 +4861,7 @@ export class MindmapView extends ItemView {
     const rect = this.notePreviewEl.getBoundingClientRect();
     const clickY = event.clientY - rect.top + this.notePreviewEl.scrollTop;
     const totalHeight = this.notePreviewEl.scrollHeight;
-    
+
     if (totalHeight === 0) {
       return 0;
     }
@@ -4867,19 +4869,19 @@ export class MindmapView extends ItemView {
     // Estimate position as a ratio of the click position to total height
     const ratio = Math.min(1, Math.max(0, clickY / totalHeight));
     const estimatedPosition = Math.floor(ratio * markdown.length);
-    
+
     // Try to snap to nearest line boundary
     const beforeText = markdown.substring(0, estimatedPosition);
     const lastNewline = beforeText.lastIndexOf('\n');
     const nextNewline = markdown.indexOf('\n', estimatedPosition);
-    
+
     if (lastNewline === -1 && nextNewline === -1) {
       return estimatedPosition;
     }
-    
+
     const distToLast = lastNewline === -1 ? Infinity : estimatedPosition - lastNewline;
     const distToNext = nextNewline === -1 ? Infinity : nextNewline - estimatedPosition;
-    
+
     return distToLast <= distToNext ? lastNewline + 1 : nextNewline + 1;
   }
 
@@ -5000,14 +5002,14 @@ export class MindmapView extends ItemView {
     }
     const prepared = this.prepareMarkdownForPreview(markdown);
     console.log('[DEBUG] prepareMarkdownForPreview output length:', prepared.length);
-    
+
     // Check if footnote markers are present in prepared markdown
     const footnoteMarkers = prepared.match(/\[?\^([a-zA-Z0-9]+)::([^\]]+)\]?/g);
     console.log('[DEBUG] Footnote markers found in prepared markdown:', footnoteMarkers);
-    
+
     await MarkdownRenderer.renderMarkdown(prepared, this.notePreviewEl, this.file?.path ?? "", this);
     this.enhanceRenderedNoteMedia();
-    
+
     // Check if footnote marker spans are present after rendering
     const renderedFootnoteSpans = this.notePreviewEl.querySelectorAll('span.mindmap-footnote-marker');
     console.log('[DEBUG] Footnote marker spans after rendering:', renderedFootnoteSpans.length);
@@ -5057,7 +5059,7 @@ export class MindmapView extends ItemView {
       };
     });
 
-        
+
     // Add selection event listener for preview mode to show comment toolbar
     console.log('[DEBUG] Adding pointerup listener to notePreviewEl');
     this.notePreviewEl.addEventListener("pointerup", () => {
@@ -5069,13 +5071,13 @@ export class MindmapView extends ItemView {
         this.updateNoteSelectionToolbar();
       }, 10);
     });
-    
+
     // Use event delegation for footnote markers - attach once to parent element
     // This ensures clicks are captured even if markers are dynamically added/removed
     this.notePreviewEl.addEventListener("click", (e) => {
       const target = e.target as HTMLElement;
       const marker = target.closest('span.mindmap-footnote-marker');
-      
+
       if (marker) {
         e.stopPropagation();
         const footnoteId = (marker as HTMLElement).dataset.footnoteId;
@@ -5085,7 +5087,7 @@ export class MindmapView extends ItemView {
         }
       }
     });
-    
+
     // Highlight commented text in preview mode - DISABLED: Using footnote markers instead
     // The footnote markers are rendered by prepareMarkdownForPreview as mindmap-footnote-marker
     console.log('[DEBUG] Skipping highlightCommentedText - using footnote markers instead');
@@ -5127,27 +5129,27 @@ export class MindmapView extends ItemView {
 
   private highlightCommentedText(): void {
     console.log('[DEBUG] === highlightCommentedText START ===');
-    
+
     if (!this.doc || !this.selectedNodeId) {
       console.log('[DEBUG] highlightCommentedText: no doc or selectedNodeId');
       return;
     }
-    
+
     const node = findNodeById(this.doc, this.selectedNodeId);
     console.log('[DEBUG] Node found:', !!node);
     console.log('[DEBUG] Node has comments:', !!node?.comments);
     console.log('[DEBUG] Comments count:', node?.comments?.length || 0);
-    
+
     if (!node || !node.comments || node.comments.length === 0) {
       console.log('[DEBUG] highlightCommentedText: no comments to highlight');
       return;
     }
-    
+
     // Step 1: Remove all existing highlights first to avoid duplication
     console.log('[DEBUG] Removing existing highlights...');
     const existingHighlights = this.notePreviewEl.querySelectorAll('span.mindmap-comment-highlight');
     console.log('[DEBUG] Found existing highlights:', existingHighlights.length);
-    
+
     existingHighlights.forEach(highlight => {
       // Replace the span with its text content
       const textContent = highlight.textContent || '';
@@ -5155,10 +5157,10 @@ export class MindmapView extends ItemView {
       highlight.parentNode?.replaceChild(textNode, highlight);
     });
     console.log('[DEBUG] Existing highlights removed');
-    
+
     // Step 2: Re-apply all highlights from scratch
     console.log('[DEBUG] Highlighting commented text, comments count:', node.comments.length);
-    
+
     // Get all text nodes in the preview (after removing old highlights)
     const textNodes: Text[] = [];
     const walker = document.createTreeWalker(
@@ -5166,7 +5168,7 @@ export class MindmapView extends ItemView {
       NodeFilter.SHOW_TEXT,
       null
     );
-    
+
     let currentNode: Node | null = walker.nextNode();
     while (currentNode) {
       if (currentNode.textContent && currentNode.textContent.trim().length > 0) {
@@ -5174,41 +5176,41 @@ export class MindmapView extends ItemView {
       }
       currentNode = walker.nextNode();
     }
-    
+
     console.log('[DEBUG] Found text nodes:', textNodes.length);
     console.log('[DEBUG] First 3 text nodes preview:');
     textNodes.slice(0, 3).forEach((tn, i) => {
       console.log(`  [${i}] "${tn.textContent?.substring(0, 50)}"`);
     });
-    
+
     // For each comment, find and highlight the text using position
     // Track which positions have been highlighted to handle duplicate texts
     const highlightedPositions = new Set<number>();
-    
+
     node.comments.forEach((comment, index) => {
       console.log('[DEBUG] Processing comment', index + 1, ':', comment.text.substring(0, 30));
       console.log('[DEBUG] Comment position:', comment.position, ', length:', comment.length);
-      
+
       // Find the text in the DOM using position-based matching
       const highlighted = this.findAndHighlightTextByPosition(
-        textNodes, 
-        comment.text, 
-        comment.position ?? -1, 
-        comment.length ?? comment.text.length, 
+        textNodes,
+        comment.text,
+        comment.position ?? -1,
+        comment.length ?? comment.text.length,
         comment.id,
         highlightedPositions
       );
       console.log('[DEBUG] Comment highlighted:', highlighted);
     });
-    
+
     console.log('[DEBUG] === highlightCommentedText END ===');
   }
-  
+
   private findAndHighlightTextByPosition(
-    textNodes: Text[], 
-    searchText: string, 
-    position: number, 
-    length: number, 
+    textNodes: Text[],
+    searchText: string,
+    position: number,
+    length: number,
     commentId: string,
     highlightedPositions: Set<number>
   ): boolean {
@@ -5217,24 +5219,24 @@ export class MindmapView extends ItemView {
     console.log('[DEBUG] Expected position:', position);
     console.log('[DEBUG] Expected length:', length);
     console.log('[DEBUG] Total text nodes:', textNodes.length);
-    
+
     if (!searchText || searchText.length === 0) {
       console.log('[DEBUG] Invalid parameters: empty search text');
       return false;
     }
-    
+
     // Merge all text nodes to get the full text
     const fullText = textNodes.map(tn => tn.textContent || '').join('');
     console.log('[DEBUG] Full merged text length:', fullText.length);
-    
+
     let targetPosition = position;
-    
+
     // Verify the text at the expected position matches
     if (position >= 0 && length > 0 && position + length <= fullText.length) {
       const actualTextAtPosition = fullText.substring(position, position + length);
       console.log('[DEBUG] Text at expected position:', actualTextAtPosition.substring(0, 30));
       console.log('[DEBUG] Match:', actualTextAtPosition === searchText);
-      
+
       if (actualTextAtPosition !== searchText) {
         console.log('[DEBUG] WARNING: Text mismatch at position!');
         console.log('[DEBUG] Expected:', searchText);
@@ -5248,19 +5250,19 @@ export class MindmapView extends ItemView {
       console.log('[DEBUG] Position out of bounds or invalid, using fallback');
       targetPosition = -1;
     }
-    
+
     // Fallback: find the text using indexOf, but skip already highlighted positions
     if (targetPosition < 0) {
       console.log('[DEBUG] Using fallback search strategy');
       let searchStartIndex = 0;
-      
+
       // If we have highlighted positions, start searching after the last one
       if (highlightedPositions.size > 0) {
         const maxHighlightedPos = Math.max(...Array.from(highlightedPositions));
         searchStartIndex = maxHighlightedPos + 1;
         console.log('[DEBUG] Starting search after position:', searchStartIndex);
       }
-      
+
       // Find all occurrences and pick the first unhighlighted one
       while (true) {
         const idx = fullText.indexOf(searchText, searchStartIndex);
@@ -5268,83 +5270,83 @@ export class MindmapView extends ItemView {
           console.log('[DEBUG] Text not found anywhere in document');
           return false;
         }
-        
+
         // Check if this position is already highlighted
         if (!highlightedPositions.has(idx)) {
           targetPosition = idx;
           console.log('[DEBUG] Found unhighlighted occurrence at position:', targetPosition);
           break;
         }
-        
+
         // Move to next occurrence
         searchStartIndex = idx + 1;
         console.log('[DEBUG] Position', idx, 'already highlighted, searching next...');
       }
     }
-    
+
     // Record this position as highlighted
     highlightedPositions.add(targetPosition);
     console.log('[DEBUG] Recorded position', targetPosition, 'as highlighted');
-    
+
     // Find which text node contains this position
     let charCount = 0;
     let targetNodeIndex = -1;
     let offsetInNode = 0;
-    
+
     for (let i = 0; i < textNodes.length; i++) {
       const nodeLength = textNodes[i].textContent?.length || 0;
-      
+
       if (charCount + nodeLength > targetPosition) {
         targetNodeIndex = i;
         offsetInNode = targetPosition - charCount;
         break;
       }
-      
+
       charCount += nodeLength;
     }
-    
+
     if (targetNodeIndex === -1) {
       console.log('[DEBUG] Could not locate target node at position', targetPosition);
       return false;
     }
-    
+
     console.log('[DEBUG] Target node index:', targetNodeIndex);
     console.log('[DEBUG] Offset in node:', offsetInNode);
-    
+
     const targetNode = textNodes[targetNodeIndex];
     const content = targetNode.textContent || '';
-    
+
     // Check if the text fits entirely within this node
     if (offsetInNode + searchText.length <= content.length) {
       console.log('[DEBUG] Text fits in single node, creating highlight span');
-      
+
       const beforeText = content.substring(0, offsetInNode);
       const afterText = content.substring(offsetInNode + searchText.length);
-      
+
       const fragment = document.createDocumentFragment();
       if (beforeText) {
         fragment.appendChild(document.createTextNode(beforeText));
       }
-      
+
       const highlightSpan = document.createElement('span');
       highlightSpan.className = 'mindmap-comment-highlight';
       highlightSpan.dataset.commentId = commentId;
       highlightSpan.textContent = searchText;
       highlightSpan.title = '点击查看评论';
       highlightSpan.style.cursor = 'pointer';
-      
+
       highlightSpan.addEventListener('click', (e) => {
         e.stopPropagation();
         console.log('[DEBUG] Highlight clicked, jumping to comment:', commentId);
         this.jumpToComment(commentId);
       });
-      
+
       fragment.appendChild(highlightSpan);
-      
+
       if (afterText) {
         fragment.appendChild(document.createTextNode(afterText));
       }
-      
+
       targetNode.parentNode?.replaceChild(fragment, targetNode);
       console.log('[DEBUG] Successfully highlighted text at position', targetPosition);
       console.log('[DEBUG] === findAndHighlightTextByPosition END ===');
@@ -5356,85 +5358,85 @@ export class MindmapView extends ItemView {
       return false;
     }
   }
-  
+
   private findAndHighlightText(textNodes: Text[], searchText: string, commentId: string): boolean {
     if (!searchText || searchText.length === 0) {
       console.log('[DEBUG] Empty search text');
       return false;
     }
-    
+
     console.log('[DEBUG] Searching for text:', searchText.substring(0, 30));
     console.log('[DEBUG] Total text nodes to search:', textNodes.length);
-    
+
     // Strategy 1: Merge all text and find position, then locate the node
     const fullText = textNodes.map(tn => tn.textContent || '').join('');
     console.log('[DEBUG] Full merged text length:', fullText.length);
     console.log('[DEBUG] First 100 chars of full text:', fullText.substring(0, 100));
-    
+
     let globalIndex = fullText.indexOf(searchText);
-    
+
     if (globalIndex !== -1) {
       console.log('[DEBUG] Found match at global position:', globalIndex);
-      
+
       // Find which text node contains this position
       let charCount = 0;
       let targetNodeIndex = -1;
       let offsetInNode = 0;
-      
+
       for (let i = 0; i < textNodes.length; i++) {
         const nodeLength = textNodes[i].textContent?.length || 0;
-        
+
         if (charCount + nodeLength > globalIndex) {
           targetNodeIndex = i;
           offsetInNode = globalIndex - charCount;
           break;
         }
-        
+
         charCount += nodeLength;
       }
-      
+
       if (targetNodeIndex === -1) {
         console.log('[DEBUG] Could not locate target node');
         return false;
       }
-      
+
       console.log('[DEBUG] Target node index:', targetNodeIndex);
       console.log('[DEBUG] Offset in node:', offsetInNode);
-      
+
       const targetNode = textNodes[targetNodeIndex];
       const content = targetNode.textContent || '';
-      
+
       // Check if the text fits entirely within this node
       if (offsetInNode + searchText.length <= content.length) {
         console.log('[DEBUG] Text fits in single node, creating highlight span');
-        
+
         const beforeText = content.substring(0, offsetInNode);
         const afterText = content.substring(offsetInNode + searchText.length);
-        
+
         const fragment = document.createDocumentFragment();
         if (beforeText) {
           fragment.appendChild(document.createTextNode(beforeText));
         }
-        
+
         const highlightSpan = document.createElement('span');
         highlightSpan.className = 'mindmap-comment-highlight';
         highlightSpan.dataset.commentId = commentId;
         highlightSpan.textContent = searchText;
         highlightSpan.title = '点击查看评论';
         highlightSpan.style.cursor = 'pointer';
-        
+
         highlightSpan.addEventListener('click', (e) => {
           e.stopPropagation();
           console.log('[DEBUG] Highlight clicked, jumping to comment:', commentId);
           this.jumpToComment(commentId);
         });
-        
+
         fragment.appendChild(highlightSpan);
-        
+
         if (afterText) {
           fragment.appendChild(document.createTextNode(afterText));
         }
-        
+
         targetNode.parentNode?.replaceChild(fragment, targetNode);
         console.log('[DEBUG] Successfully highlighted text in single node');
         return true;
@@ -5445,76 +5447,76 @@ export class MindmapView extends ItemView {
         return false;
       }
     }
-    
+
     console.log('[DEBUG] No exact match found in merged text');
-    
+
     // Strategy 2: Try case-insensitive search
     const lowerSearchText = searchText.toLowerCase();
     const lowerFullText = fullText.toLowerCase();
     globalIndex = lowerFullText.indexOf(lowerSearchText);
-    
+
     if (globalIndex !== -1) {
       console.log('[DEBUG] Found case-insensitive match at global position:', globalIndex);
-      
+
       // Find which text node contains this position
       let charCount = 0;
       let targetNodeIndex = -1;
       let offsetInNode = 0;
-      
+
       for (let i = 0; i < textNodes.length; i++) {
         const nodeLength = textNodes[i].textContent?.length || 0;
-        
+
         if (charCount + nodeLength > globalIndex) {
           targetNodeIndex = i;
           offsetInNode = globalIndex - charCount;
           break;
         }
-        
+
         charCount += nodeLength;
       }
-      
+
       if (targetNodeIndex === -1) {
         console.log('[DEBUG] Could not locate target node for case-insensitive match');
         return false;
       }
-      
+
       console.log('[DEBUG] Target node index:', targetNodeIndex);
       console.log('[DEBUG] Offset in node:', offsetInNode);
-      
+
       const targetNode = textNodes[targetNodeIndex];
       const content = targetNode.textContent || '';
-      
+
       // Check if the text fits entirely within this node
       if (offsetInNode + searchText.length <= content.length) {
         console.log('[DEBUG] Text fits in single node, creating highlight span');
-        
+
         const beforeText = content.substring(0, offsetInNode);
         const afterText = content.substring(offsetInNode + searchText.length);
-        
+
         const fragment = document.createDocumentFragment();
         if (beforeText) {
           fragment.appendChild(document.createTextNode(beforeText));
         }
-        
+
         const highlightSpan = document.createElement('span');
         highlightSpan.className = 'mindmap-comment-highlight';
         highlightSpan.dataset.commentId = commentId;
         highlightSpan.textContent = searchText;
         highlightSpan.title = '点击查看评论';
         highlightSpan.style.cursor = 'pointer';
-        
+
         highlightSpan.addEventListener('click', (e) => {
           e.stopPropagation();
           console.log('[DEBUG] Highlight clicked, jumping to comment:', commentId);
           this.jumpToComment(commentId);
         });
-        
+
         fragment.appendChild(highlightSpan);
-        
+
         if (afterText) {
           fragment.appendChild(document.createTextNode(afterText));
         }
-        
+
         targetNode.parentNode?.replaceChild(fragment, targetNode);
         console.log('[DEBUG] Successfully highlighted text in single node');
         return true;
@@ -5525,17 +5527,17 @@ export class MindmapView extends ItemView {
         return false;
       }
     }
-    
+
     console.log('[DEBUG] No case-insensitive match found in merged text');
     return false;
   }
-  
+
   private jumpToComment(commentId: string): void {
     console.log('[DEBUG] Jumping to comment:', commentId);
-    
+
     // Show comments panel if not already shown
     this.showCommentsPanel();
-    
+
     // Find and scroll to the comment card
     setTimeout(() => {
       const commentCard = this.noteCommentsPanelEl?.querySelector(`[data-comment-id="${commentId}"]`);
@@ -5548,37 +5550,37 @@ export class MindmapView extends ItemView {
       }
     }, 100);
   }
-  
+
   private jumpToCommentByFootnoteId(footnoteId: string): void {
     console.log('[DEBUG] Jumping to comment by footnote ID:', footnoteId);
-    
+
     // Find the comment with matching footnoteId
     if (!this.doc || !this.selectedNodeId) {
       return;
     }
-    
+
     const node = findNodeById(this.doc, this.selectedNodeId);
     if (!node || !node.comments) {
       return;
     }
-    
+
     // Use prefix matching because Obsidian may add unique suffixes to IDs (e.g., "c3-3411732295364840")
     const comment = node.comments.find(c => c.footnoteId && footnoteId.startsWith(c.footnoteId));
     if (!comment) {
       console.log('[DEBUG] Comment not found for footnote ID:', footnoteId);
       return;
     }
-    
+
     // First, try to find and highlight the footnote marker in preview
     // Use prefix matching because Obsidian adds unique suffixes to IDs (e.g., "c2-395730095274bf5e")
     const footnoteMarker = this.notePreviewEl?.querySelector(`[data-footnote-id^="${footnoteId}"]`);
-    
+
     if (footnoteMarker) {
       console.log('[DEBUG] Found footnote marker with actual ID:', footnoteMarker.getAttribute('data-footnote-id'));
-      
+
       // Scroll to the marker
       footnoteMarker.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      
+
       // Add flash animation
       footnoteMarker.addClass('mindmap-footnote-marker-flash');
       setTimeout(() => {
@@ -5587,58 +5589,58 @@ export class MindmapView extends ItemView {
     } else {
       console.log('[DEBUG] Footnote marker not found in preview');
     }
-    
+
     // Jump to the comment card
     this.jumpToComment(comment.id);
   }
-  
+
   private scrollToHighlightedText(commentId: string): void {
     console.log('[DEBUG] Scrolling to highlighted text for comment:', commentId);
-    
+
     // Find the highlight span in the preview
     const highlightSpan = this.notePreviewEl.querySelector(`span.mindmap-comment-highlight[data-comment-id="${commentId}"]`);
-    
+
     if (!highlightSpan) {
       console.log('[DEBUG] Highlight span not found, may need to re-render');
       new Notice("未找到高亮文本，请刷新预览");
       return;
     }
-    
+
     // Scroll to the highlight with smooth animation
     highlightSpan.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    
+
     // Add flash animation
     highlightSpan.addClass('mindmap-comment-text-flash');
     setTimeout(() => {
       highlightSpan.removeClass('mindmap-comment-text-flash');
     }, 1500);
-    
+
     console.log('[DEBUG] Successfully scrolled to highlighted text');
   }
-  
+
   private scrollToFootnoteMarker(footnoteId: string): void {
     console.log('[DEBUG] Scrolling to footnote marker:', footnoteId);
-    
+
     // Check if in edit mode
     if (this.noteSurfaceEl?.hasClass("is-editing")) {
       // In edit mode, find the footnote marker in the editor
       const footnotePattern = `[^${footnoteId}::`;
-      
+
       if (this.noteEditorView && !this.isMobileLayout) {
         // CodeMirror editor
         const doc = this.noteEditorView.state.doc;
         const text = doc.toString();
         const position = text.indexOf(footnotePattern);
-        
+
         if (position !== -1) {
           console.log('[DEBUG] Found footnote at position:', position);
-          
+
           // Scroll to the position
           this.noteEditorView.scrollDOM.scrollTo({
             top: this.getPositionScrollTop(position),
             behavior: 'smooth'
           });
-          
+
           // Select the footnote marker
           const endPosition = text.indexOf(']', position);
           if (endPosition !== -1) {
@@ -5646,7 +5648,7 @@ export class MindmapView extends ItemView {
               selection: { anchor: position, head: endPosition + 1 }
             });
           }
-          
+
           // Add flash effect by temporarily highlighting
           this.flashEditorPosition(position, endPosition > position ? endPosition - position : 20);
         } else {
@@ -5658,25 +5660,25 @@ export class MindmapView extends ItemView {
         const input = this.noteInputEl;
         const text = input.value;
         const position = text.indexOf(footnotePattern);
-        
+
         if (position !== -1) {
           console.log('[DEBUG] Found footnote at position:', position);
-          
+
           // Calculate line number for scrolling
           const lines = text.substring(0, position).split('\n');
           const lineNumber = lines.length - 1;
-          
+
           // Scroll to approximate position
           const lineHeight = 20; // Approximate line height
           input.scrollTop = lineNumber * lineHeight;
-          
+
           // Select the footnote marker
           const endPosition = text.indexOf(']', position);
           if (endPosition !== -1) {
             input.setSelectionRange(position, endPosition + 1);
             input.focus();
           }
-          
+
           // Flash effect
           input.addClass('mindmap-footnote-flash');
           setTimeout(() => {
@@ -5691,32 +5693,32 @@ export class MindmapView extends ItemView {
       // In preview mode, find the footnote marker span
       console.log('[DEBUG] Looking for footnote marker in preview mode');
       console.log('[DEBUG] notePreviewEl exists:', !!this.notePreviewEl);
-      
+
       // First, try to find the marker directly
       // Note: Obsidian's MarkdownRenderer may append a suffix to the footnote ID (e.g., "c4" becomes "c4-96ce84c39842d649")
       // So we need to use attribute starts-with selector
       let markerSpan: HTMLElement | null = this.notePreviewEl?.querySelector(`span.mindmap-footnote-marker[data-footnote-id^="${footnoteId}"]`) as HTMLElement | null;
-      
+
       console.log('[DEBUG] Marker found on first try:', !!markerSpan);
       if (markerSpan) {
         console.log('[DEBUG] Found marker with ID:', markerSpan.dataset.footnoteId);
       }
-      
+
       // If not found, check if we need to re-render
       if (!markerSpan) {
         console.log('[DEBUG] Marker not found, checking if markdown needs re-render');
-        
+
         // Get the current node to check if it has the footnote
         const node = findNodeById(this.doc!, this.selectedNodeId!);
         if (node && node.note) {
           const hasFootnote = node.note.includes(`[^${footnoteId}::`);
           console.log('[DEBUG] Node has footnote in source:', hasFootnote);
-          
+
           if (hasFootnote) {
             // Footnote exists in source but not rendered, trigger re-render
             console.log('[DEBUG] Triggering markdown re-render');
             this.scheduleMarkdownRender(node.note);
-            
+
             // Wait longer for render to complete (scheduleMarkdownRender has 60ms delay + rendering time)
             setTimeout(() => {
               // Use attribute starts-with selector to handle potential suffixes added by Obsidian
@@ -5725,7 +5727,7 @@ export class MindmapView extends ItemView {
               if (markerSpan) {
                 console.log('[DEBUG] Found marker with ID:', markerSpan.dataset.footnoteId);
               }
-              
+
               if (markerSpan) {
                 this.highlightAndScrollMarker(markerSpan);
               } else {
@@ -5738,7 +5740,7 @@ export class MindmapView extends ItemView {
                   if (markerSpan) {
                     console.log('[DEBUG] Found marker with ID:', markerSpan.dataset.footnoteId);
                   }
-                  
+
                   if (markerSpan) {
                     this.highlightAndScrollMarker(markerSpan);
                   } else {
@@ -5751,41 +5753,41 @@ export class MindmapView extends ItemView {
             return;
           }
         }
-        
+
         console.log('[DEBUG] Footnote marker not found in preview');
         new Notice("未找到脚注标记");
         return;
       }
-      
+
       // Marker found, highlight and scroll
       this.highlightAndScrollMarker(markerSpan);
     }
   }
-  
+
   private highlightAndScrollMarker(markerSpan: HTMLElement): void {
     console.log('[DEBUG] Highlighting and scrolling to marker');
-    
+
     // Scroll to the marker
     markerSpan.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    
+
     // Add flash animation
     markerSpan.addClass('mindmap-footnote-marker-flash');
     setTimeout(() => {
       markerSpan.removeClass('mindmap-footnote-marker-flash');
     }, 1500);
   }
-  
+
   private getPositionScrollTop(position: number): number {
     // Estimate scroll position based on character position
     // This is a rough estimate - actual implementation would need line metrics
     const doc = this.noteEditorView?.state.doc;
     if (!doc) return 0;
-    
+
     const line = doc.lineAt(position);
     const lineHeight = 24; // Approximate line height in pixels
     return line.number * lineHeight;
   }
-  
+
   private flashEditorPosition(startPos: number, length: number): void {
     // Visual feedback for editor positioning
     // In a full implementation, this would add a temporary highlight overlay
@@ -6252,7 +6254,7 @@ export class MindmapView extends ItemView {
   private hasActiveNoteSelection(): boolean {
     console.log('[DEBUG] hasActiveNoteSelection called');
     console.log('[DEBUG] is-editing class:', this.noteSurfaceEl?.hasClass("is-editing"));
-    
+
     // For preview mode, check window selection FIRST
     if (!this.noteSurfaceEl?.hasClass("is-editing")) {
       console.log('[DEBUG] Checking preview mode selection');
@@ -6260,7 +6262,7 @@ export class MindmapView extends ItemView {
       console.log('[DEBUG] Window selection exists:', !!selection);
       console.log('[DEBUG] Selection isCollapsed:', selection?.isCollapsed);
       console.log('[DEBUG] Selection text:', selection?.toString());
-      
+
       if (selection && !selection.isCollapsed && selection.toString().trim().length > 0) {
         const range = selection.getRangeAt(0);
         const isInPreview = this.notePreviewEl.contains(range.commonAncestorContainer);
@@ -6270,7 +6272,7 @@ export class MindmapView extends ItemView {
       console.log('[DEBUG] No valid selection found in preview mode');
       return false;
     }
-    
+
     if (this.noteEditorView && !this.isMobileLayout) {
       console.log('[DEBUG] Checking CodeMirror editor mode');
       const selection = this.noteEditorView.state.selection.main;
@@ -6279,7 +6281,7 @@ export class MindmapView extends ItemView {
       console.log('[DEBUG] Editor selection result:', result);
       return result;
     }
-    
+
     console.log('[DEBUG] Checking textarea mode');
     const result = document.activeElement === this.noteInputEl && this.noteInputEl.selectionStart !== this.noteInputEl.selectionEnd;
     console.log('[DEBUG] Textarea selection result:', result);
@@ -6291,21 +6293,21 @@ export class MindmapView extends ItemView {
       this.hideNoteSelectionToolbar();
       return;
     }
-    
+
     // Check if in preview mode - only show comment button
     const isPreviewMode = !this.noteSurfaceEl?.hasClass("is-editing");
-    
+
     // Show/hide buttons based on mode using the stored references
     // Edit mode buttons: hide in preview mode, show in edit mode
     this.editModeButtonEls.forEach(buttonEl => {
       buttonEl.style.display = isPreviewMode ? "none" : "";
     });
-    
+
     // Common buttons (like comment): always show when toolbar is visible
     this.commonButtonEls.forEach(buttonEl => {
       buttonEl.style.display = "";
     });
-    
+
     const surfaceRect = this.noteSurfaceEl.getBoundingClientRect();
     let left = surfaceRect.width / 2;
     let top = 10;
@@ -6337,21 +6339,21 @@ export class MindmapView extends ItemView {
 
     const toolbarWidth = this.noteSelectionToolbarEl.offsetWidth || 260;
     const toolbarHeight = this.noteSelectionToolbarEl.offsetHeight || 38;
-    
+
     // Check if there's enough space above the selection
     const spaceAbove = top;
     const spaceBelow = surfaceRect.height - top;
-    
+
     // If not enough space above (toolbar height + margin), position below
     if (spaceAbove < toolbarHeight + 16) {
       positionAbove = false;
     }
-    
+
     const clampedLeft = Math.min(Math.max(left, toolbarWidth / 2 + 8), Math.max(toolbarWidth / 2 + 8, surfaceRect.width - toolbarWidth / 2 - 8));
-    const clampedTop = positionAbove 
+    const clampedTop = positionAbove
       ? Math.max(8, top - toolbarHeight - 10)
       : Math.min(top + 24, surfaceRect.height - toolbarHeight - 8);
-    
+
     this.noteSelectionToolbarEl.style.left = `${clampedLeft}px`;
     this.noteSelectionToolbarEl.style.top = `${clampedTop}px`;
     this.noteSelectionToolbarEl.removeClass("is-hidden");
@@ -6436,19 +6438,19 @@ export class MindmapView extends ItemView {
     console.log('[DEBUG] handleAddComment called (footnote mode)');
     console.log('[DEBUG] this.doc exists:', !!this.doc);
     console.log('[DEBUG] this.selectedNodeId:', this.selectedNodeId);
-    
+
     if (!this.doc || !this.selectedNodeId) {
       console.log('[DEBUG] Early return: missing doc or selectedNodeId');
       return;
     }
-    
+
     // Get selected text and position
     let selectedText = "";
     let selectionStart = 0;
     let isEditMode = false;
-    
+
     console.log('[DEBUG] Checking mode - is-editing:', this.noteSurfaceEl?.hasClass("is-editing"));
-    
+
     // Check if in edit mode
     if (this.noteSurfaceEl?.hasClass("is-editing")) {
       isEditMode = true;
@@ -6481,77 +6483,77 @@ export class MindmapView extends ItemView {
       // Preview mode: get selection from window
       console.log('[DEBUG] Handling preview mode comment');
       const selection = window.getSelection();
-      
+
       if (!selection || selection.isCollapsed || selection.toString().trim().length === 0) {
         console.log('[DEBUG] No valid selection in preview mode');
         this.hideNoteSelectionToolbar();
         return;
       }
-      
+
       selectedText = selection.toString();
       console.log('[DEBUG] Selected text:', selectedText);
-      
+
       // Calculate position by finding the text in Markdown source (node.note)
       const node = findNodeById(this.doc!, this.selectedNodeId!);
-      
+
       if (!node || !node.note) {
         console.log('[DEBUG] Node or note not found');
         this.hideNoteSelectionToolbar();
         new Notice("该节点没有笔记内容");
         return;
       }
-      
+
       // Step 1: Find all occurrences of selectedText in DOM to determine which one user selected
       console.log('[DEBUG] Step 1: Finding all occurrences in DOM to determine selection index');
-      
+
       const walker = document.createTreeWalker(
         this.notePreviewEl,
         NodeFilter.SHOW_TEXT,
         null
       );
-      
+
       let domOccurrenceIndex = -1;
       let currentDomOccurrence = 0;
       let currentNode: Node | null = walker.nextNode();
-      
+
       while (currentNode) {
         const textContent = currentNode.textContent || '';
         let searchPos = 0;
-        
+
         // Find all occurrences of selectedText in this text node
         while (true) {
           const idx = textContent.indexOf(selectedText, searchPos);
           if (idx === -1) break;
-          
+
           // Check if this occurrence matches the user's selection
           const range = selection.getRangeAt(0);
           const selStartContainer = range.startContainer;
           const selStartOffset = range.startOffset;
-          
+
           // Calculate if this occurrence is within the selection
           if (currentNode === selStartContainer && idx === selStartOffset) {
             domOccurrenceIndex = currentDomOccurrence;
             console.log('[DEBUG] Found matching occurrence in DOM at index:', domOccurrenceIndex);
             break;
           }
-          
+
           currentDomOccurrence++;
           searchPos = idx + 1;
         }
-        
+
         if (domOccurrenceIndex !== -1) break;
         currentNode = walker.nextNode();
       }
-      
+
       if (domOccurrenceIndex === -1) {
         console.log('[DEBUG] Could not determine which occurrence was selected in DOM');
         this.hideNoteSelectionToolbar();
         new Notice("无法确定选中的文本位置");
         return;
       }
-      
+
       console.log('[DEBUG] User selected occurrence number:', domOccurrenceIndex + 1, 'in DOM');
-      
+
       // Step 2: Find all occurrences in source code
       const occurrences: number[] = [];
       let searchIndex = 0;
@@ -6561,28 +6563,28 @@ export class MindmapView extends ItemView {
         occurrences.push(idx);
         searchIndex = idx + 1;
       }
-      
+
       console.log('[DEBUG] Found', occurrences.length, 'occurrences in source at positions:', occurrences);
-      
+
       if (occurrences.length === 0) {
         console.log('[DEBUG] Text not found in node.note');
         this.hideNoteSelectionToolbar();
         new Notice("无法在节点内容中找到选中文本");
         return;
       }
-      
+
       if (domOccurrenceIndex >= occurrences.length) {
         console.log('[DEBUG] DOM occurrence index out of bounds');
         this.hideNoteSelectionToolbar();
         new Notice("选中文本位置异常");
         return;
       }
-      
+
       // Use the occurrence at the same index
       selectionStart = occurrences[domOccurrenceIndex];
       console.log('[DEBUG] Using source occurrence', domOccurrenceIndex + 1, 'at position:', selectionStart);
     }
-    
+
     // Check if there are multiple occurrences and show selection modal
     const node = findNodeById(this.doc!, this.selectedNodeId!);
     if (node && node.note) {
@@ -6594,13 +6596,13 @@ export class MindmapView extends ItemView {
         occurrences.push(idx);
         searchIndex = idx + 1;
       }
-      
+
       console.log('[DEBUG] Total occurrences found:', occurrences.length);
-      
+
       if (occurrences.length > 1) {
         // Multiple occurrences - show a modal to let user choose which one
         console.log('[DEBUG] Multiple occurrences detected, showing selection modal');
-        
+
         const modal = new TextSelectionModal(
           this.app,
           selectedText,
@@ -6609,12 +6611,12 @@ export class MindmapView extends ItemView {
           (selectedIndex: number) => {
             console.log('[DEBUG] User selected occurrence', selectedIndex + 1, 'at position:', occurrences[selectedIndex]);
             selectionStart = occurrences[selectedIndex];
-            
+
             // Continue with comment modal after selection
             this.showCommentModal(selectedText, selectionStart, isEditMode);
           }
         );
-        
+
         modal.open();
         return; // Exit early, the rest will be handled in the callback
       } else if (occurrences.length === 1) {
@@ -6623,28 +6625,28 @@ export class MindmapView extends ItemView {
         console.log('[DEBUG] Single occurrence found at position:', selectionStart);
       }
     }
-    
+
     console.log('[DEBUG] Opening comment modal with text:', selectedText);
     this.showCommentModal(selectedText, selectionStart, isEditMode);
   }
 
   private showCommentModal(selectedText: string, selectionStart: number, isEditMode: boolean): void {
     console.log('[DEBUG] Opening comment modal with text:', selectedText);
-    
+
     // Show comment modal
     const modal = new CommentModal(this.app, selectedText, (comment: string) => {
       console.log('[DEBUG] Comment submitted:', comment);
-      
+
       const node = findNodeById(this.doc!, this.selectedNodeId!);
       if (!node) {
         console.log('[DEBUG] Node not found when saving comment');
         return;
       }
-      
+
       if (!node.comments) {
         node.comments = [];
       }
-      
+
       // Generate unique footnote ID (c1, c2, c3...)
       const existingIds = node.comments.map(c => c.footnoteId || '').filter(id => id.startsWith('c'));
       const maxNum = existingIds.reduce((max, id) => {
@@ -6652,12 +6654,12 @@ export class MindmapView extends ItemView {
         return isNaN(num) ? max : Math.max(max, num);
       }, 0);
       const footnoteId = `c${maxNum + 1}`;
-      
+
       console.log('[DEBUG] Generated footnote ID:', footnoteId);
-      
+
       // Create footnote marker: [^c1::选中的原文]
       const footnoteMarker = `[^${footnoteId}::${selectedText}]`;
-      
+
       // Replace selected text with footnote marker in node.note
       if (isEditMode) {
         // In edit mode, replace the selected text
@@ -6679,9 +6681,9 @@ export class MindmapView extends ItemView {
           input.dispatchEvent(new Event("input"));
           input.focus({ preventScroll: true });
         }
-        
+
         // Update node.note
-        node.note = isEditMode 
+        node.note = isEditMode
           ? (this.noteEditorView ? this.noteEditorView.state.doc.toString() : this.noteInputEl.value)
           : node.note;
       } else {
@@ -6694,7 +6696,7 @@ export class MindmapView extends ItemView {
         const after = node.note.substring(selectionStart + selectedText.length);
         node.note = before + footnoteMarker + after;
       }
-      
+
       // Save comment metadata (for reference in comments panel)
       const newComment: MindmapComment = {
         id: crypto.randomUUID(),
@@ -6705,14 +6707,14 @@ export class MindmapView extends ItemView {
         length: selectedText.length,
         createdAt: Date.now()
       };
-      
+
       node.comments.push(newComment);
       console.log('[DEBUG] Comment added with footnote marker, saving...');
       this.requestSave();
-      
+
       // Show comments panel
       this.showCommentsPanel();
-      
+
       // Re-render markdown to show the footnote marker
       if (!isEditMode) {
         console.log('[DEBUG] Re-rendering markdown to show footnote marker');
@@ -6721,7 +6723,7 @@ export class MindmapView extends ItemView {
         }, 50);
       }
     });
-    
+
     modal.open();
     this.hideNoteSelectionToolbar();
   }
@@ -6730,20 +6732,20 @@ export class MindmapView extends ItemView {
     if (!this.noteCommentsPanelEl || !this.doc || !this.selectedNodeId) {
       return;
     }
-    
+
     const node = findNodeById(this.doc, this.selectedNodeId);
     if (!node) {
       return;
     }
-    
+
     this.noteCommentsPanelEl.removeClass("is-hidden");
     this.layoutEl?.addClass("has-comments");
-    
+
     // Update toggle button state
     if (this.commentsToggleBtn) {
       this.commentsToggleBtn.addClass("is-active");
     }
-    
+
     this.renderCommentsList(node);
   }
 
@@ -6751,12 +6753,12 @@ export class MindmapView extends ItemView {
     if (this.noteCommentsPanelEl) {
       this.noteCommentsPanelEl.addClass("is-hidden");
       this.layoutEl?.removeClass("has-comments");
-      
+
       // Update toggle button state
       if (this.commentsToggleBtn) {
         this.commentsToggleBtn.removeClass("is-active");
       }
-      
+
       this.editingCommentId = null;
     }
   }
@@ -6766,22 +6768,22 @@ export class MindmapView extends ItemView {
     if (!confirmed) {
       return;
     }
-    
+
     // Find the comment to get its footnote ID and selected text
     const comment = node.comments?.find(c => c.id === commentId);
-    
+
     if (node.comments) {
       // Remove from comments array
       node.comments = node.comments.filter(c => c.id !== commentId);
-      
+
       // If using footnote mode, also remove the footnote marker from the source
       if (comment && comment.footnoteId && comment.text) {
         // Correct pattern to match the entire footnote marker: [^c1::selected text]
         const footnoteMarker = `[^${comment.footnoteId}::${comment.text}]`;
-        
+
         console.log('[DEBUG] Deleting footnote marker:', footnoteMarker);
         console.log('[DEBUG] Restoring text:', comment.text);
-        
+
         if (this.noteSurfaceEl?.hasClass("is-editing")) {
           // In edit mode, remove from editor content
           if (this.noteEditorView && !this.isMobileLayout) {
@@ -6789,13 +6791,13 @@ export class MindmapView extends ItemView {
             const doc = this.noteEditorView.state.doc;
             const text = doc.toString();
             const startPos = text.indexOf(footnoteMarker);
-            
+
             if (startPos !== -1) {
               // Replace footnote marker with just the original text
               this.noteEditorView.dispatch({
                 changes: { from: startPos, to: startPos + footnoteMarker.length, insert: comment.text }
               });
-              
+
               // Update node.note after deletion
               node.note = this.noteEditorView.state.doc.toString();
             } else {
@@ -6806,14 +6808,14 @@ export class MindmapView extends ItemView {
             const input = this.noteInputEl;
             const text = input.value;
             const startPos = text.indexOf(footnoteMarker);
-            
+
             if (startPos !== -1) {
               // Replace footnote marker with just the original text
               const before = text.substring(0, startPos);
               const after = text.substring(startPos + footnoteMarker.length);
               input.value = before + comment.text + after;
               input.dispatchEvent(new Event("input"));
-              
+
               // Update node.note
               node.note = input.value;
             } else {
@@ -6824,7 +6826,7 @@ export class MindmapView extends ItemView {
           // In preview mode, remove from node.note directly
           const text = node.note || "";
           const startPos = text.indexOf(footnoteMarker);
-          
+
           if (startPos !== -1) {
             const before = text.substring(0, startPos);
             const after = text.substring(startPos + footnoteMarker.length);
@@ -6834,10 +6836,10 @@ export class MindmapView extends ItemView {
           }
         }
       }
-      
+
       this.requestSave();
       this.renderCommentsList(node);
-      
+
       // Re-render markdown to update the preview
       if (!this.noteSurfaceEl?.hasClass("is-editing") && node.note) {
         console.log('[DEBUG] Re-rendering markdown after comment deletion');
@@ -6853,19 +6855,19 @@ export class MindmapView extends ItemView {
     if (!listEl) {
       return;
     }
-    
+
     listEl.empty();
-    
+
     if (!node.comments || node.comments.length === 0) {
       const emptyEl = listEl.createDiv({ cls: "mindmap-empty-comments" });
       emptyEl.createDiv({ cls: "mindmap-empty-comments-icon", text: "💬" });
       emptyEl.createDiv({ cls: "mindmap-empty-comments-text", text: "暂无评论\n选中文本后点击 💬 按钮添加评论" });
       return;
     }
-    
+
     // Sort comments by creation time (newest first)
     const sortedComments = [...node.comments].sort((a, b) => b.createdAt - a.createdAt);
-    
+
     sortedComments.forEach((comment) => {
       this.renderCommentCard(listEl, node, comment);
     });
@@ -6873,7 +6875,7 @@ export class MindmapView extends ItemView {
 
   private renderCommentCard(containerEl: HTMLElement, node: MindmapNode, comment: MindmapComment): void {
     const cardEl = containerEl.createDiv({ cls: "mindmap-comment-card", attr: { "data-comment-id": comment.id } });
-    
+
     // Add click handler to scroll to highlighted text in note
     cardEl.addEventListener("click", (e) => {
       // Don't trigger if clicking on action buttons
@@ -6881,7 +6883,7 @@ export class MindmapView extends ItemView {
         return;
       }
       console.log('[DEBUG] Comment card clicked, scrolling to highlighted text:', comment.id);
-      
+
       // If using footnote mode, jump to the footnote marker in the source
       if (comment.footnoteId) {
         this.scrollToFootnoteMarker(comment.footnoteId);
@@ -6890,29 +6892,29 @@ export class MindmapView extends ItemView {
         this.scrollToHighlightedText(comment.id);
       }
     });
-    
+
     // Header with footnote ID indicator
     const headerEl = cardEl.createDiv({ cls: "mindmap-comment-header" });
-    
+
     if (comment.footnoteId) {
-      const footnoteBadge = headerEl.createSpan({ 
+      const footnoteBadge = headerEl.createSpan({
         cls: "mindmap-footnote-badge",
         text: `[^${comment.footnoteId}]`
       });
       footnoteBadge.title = "点击定位到源码位置";
     }
-    
+
     // Quoted text
     const quoteEl = cardEl.createDiv({ cls: "mindmap-comment-quote" });
     quoteEl.setText(`"${comment.text}"`);
-    
+
     // Comment body or edit form
     if (this.editingCommentId === comment.id) {
       this.renderCommentEditForm(cardEl, node, comment);
     } else {
       const commentBodyEl = cardEl.createDiv({ cls: "mindmap-comment-body markdown-preview-view" });
       void MarkdownRenderer.renderMarkdown(comment.comment, commentBodyEl, this.file?.path ?? "", this);
-      
+
       // Meta info
       const metaEl = cardEl.createDiv({ cls: "mindmap-comment-meta" });
       const dateStr = new Date(comment.createdAt).toLocaleString("zh-CN", {
@@ -6923,7 +6925,7 @@ export class MindmapView extends ItemView {
         minute: "2-digit"
       });
       metaEl.createSpan({ text: dateStr });
-      
+
       // Actions
       const actionsEl = metaEl.createDiv({ cls: "mindmap-comment-actions" });
       const editBtn = actionsEl.createEl("button", { cls: "mindmap-comment-action-btn", text: "编辑" });
@@ -6931,7 +6933,7 @@ export class MindmapView extends ItemView {
         this.editingCommentId = comment.id;
         this.renderCommentsList(node);
       });
-      
+
       const deleteBtn = actionsEl.createEl("button", { cls: "mindmap-comment-action-btn delete", text: "删除" });
       deleteBtn.addEventListener("click", () => {
         this.deleteComment(node, comment.id);
@@ -6943,9 +6945,9 @@ export class MindmapView extends ItemView {
     const textareaEl = cardEl.createEl("textarea", { cls: "mindmap-comment-edit-input" });
     textareaEl.value = comment.comment;
     textareaEl.focus();
-    
+
     const actionsEl = cardEl.createDiv({ cls: "mindmap-comment-edit-actions" });
-    
+
     const saveBtn = actionsEl.createEl("button", { cls: "mindmap-comment-save-btn", text: "保存" });
     saveBtn.addEventListener("click", () => {
       const newComment = textareaEl.value.trim();
@@ -6953,7 +6955,7 @@ export class MindmapView extends ItemView {
         this.updateComment(node, comment.id, newComment);
       }
     });
-    
+
     const cancelBtn = actionsEl.createEl("button", { cls: "mindmap-comment-cancel-btn", text: "取消" });
     cancelBtn.addEventListener("click", () => {
       this.editingCommentId = null;
@@ -6969,7 +6971,7 @@ export class MindmapView extends ItemView {
       this.requestSave();
       this.editingCommentId = null;
       this.renderCommentsList(node);
-      
+
       // Update highlights after editing - DISABLED: Using footnote markers instead
       /*
       if (!this.noteSurfaceEl?.hasClass("is-editing")) {
@@ -6979,8 +6981,8 @@ export class MindmapView extends ItemView {
         }, 100);
       }
       */
-  }
     }
+  }
 
 
   private prepareMarkdownForPreview(markdown: string): string {
@@ -7009,7 +7011,7 @@ export class MindmapView extends ItemView {
       const resourceUrl = this.app.vault.getResourcePath(file);
       return `![](${resourceUrl})`;
     });
-    
+
     // Then, process footnote-style comments: [^c1::original text]
     // Replace with the original text wrapped in a clickable highlighted span
     processed = processed.replace(/\[\^([a-zA-Z0-9]+)::([^\]]+)\]/g, (match, footnoteId, originalText) => {
@@ -7237,7 +7239,7 @@ export class MindmapView extends ItemView {
       currentFile: this.file?.path,
       isMobile: this.isMobileLayout
     });
-    
+
     const target = this.app.vault.getAbstractFileByPath(path);
     if (!(target instanceof TFile)) {
       console.warn('[MindmapView] ⚠️ Target is not a file:', path);
@@ -7252,7 +7254,7 @@ export class MindmapView extends ItemView {
 
     const isMindmap = target.extension === "mindmap" || target.name.endsWith(".mindmap.json");
     console.log('[MindmapView] 📄 Is mindmap file:', isMindmap, 'extension:', target.extension);
-    
+
     if (isMindmap) {
       const normalizedFocusLinkedFromPath = focusLinkedFromPath ? normalizePath(focusLinkedFromPath) : null;
       const existingLeaves = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).filter((leaf) => {
@@ -7299,13 +7301,13 @@ export class MindmapView extends ItemView {
     console.log('[MindmapView] 📄 Opening non-mindmap file via standard method');
     await this.openByLinkText(path, inNewTab);
   }
-  
+
   private markIntentionalSplit(leaf: WorkspaceLeaf): void {
     try {
       // Try to find our plugin instance and mark the split
       const plugins = (this.app as any).plugins?.plugins;
       if (plugins) {
-        const plugin: any = Object.values(plugins).find((p: any) => 
+        const plugin: any = Object.values(plugins).find((p: any) =>
           p?.manifest?.id === 'obsidian-note-mind'
         );
         if (plugin && typeof plugin.markSplitCreation === 'function') {
@@ -7666,28 +7668,28 @@ export class MindmapView extends ItemView {
     if (!this.doc) {
       return;
     }
-    
+
     const node = findNodeById(this.doc, nodeId);
     if (!node) {
       return;
     }
-    
+
     // 检查是否有子节点
     if (!node.children || node.children.length === 0) {
       new Notice("该节点没有子节点，无需内化");
       return;
     }
-    
+
     // 捕获历史快照以便撤销
     this.captureHistorySnapshot();
-    
+
     // 将子节点转换为 Markdown 格式
     let childMarkdownContent = "\n\n## 内化内容\n\n"; // 添加分隔标题
-    
+
     const convertNodeToMarkdown = (node: MindmapNode, depth: number = 0): string => {
       const indent = "  ".repeat(depth); // 使用两个空格缩进
       let markdown = `${indent}- **${node.title}**\n`;
-      
+
       // 添加节点笔记（如果有）
       if (node.note && node.note.trim()) {
         const noteLines = node.note.trim().split('\n');
@@ -7697,35 +7699,35 @@ export class MindmapView extends ItemView {
           }
         });
       }
-      
+
       // 递归处理子节点
       if (node.children && node.children.length > 0) {
         node.children.forEach(child => {
           markdown += convertNodeToMarkdown(child, depth + 1);
         });
       }
-      
+
       return markdown;
     };
-    
+
     // 遍历所有子节点并转换为 Markdown
     node.children.forEach(child => {
       childMarkdownContent += convertNodeToMarkdown(child);
     });
-    
+
     // 将 Markdown 内容追加到当前节点的笔记中
     if (!node.note) {
       node.note = "";
     }
     node.note += childMarkdownContent;
-    
+
     // 删除所有子节点
     node.children = [];
-    
+
     // 更新界面
     this.requestSave();
     this.renderMindmap();
-    
+
     new Notice(`已内化 ${node.children.length} 个子节点到笔记中`);
   }
 
@@ -7758,7 +7760,7 @@ export class MindmapView extends ItemView {
         });
       });
     }
-    
+
     // Add "Separate" option for PC only
     if (!this.isMobileLayout && node) {
       menu.addItem((item) => {
@@ -7767,7 +7769,7 @@ export class MindmapView extends ItemView {
         });
       });
     }
-    
+
     // menu.addItem((item) => {
     //   item.setTitle("添加子节点").setIcon("plus").onClick(() => {
     //     this.createChildNode(nodeId);
@@ -7847,7 +7849,7 @@ export class MindmapView extends ItemView {
     const confirmMessage = childCount > 1
       ? `确认将节点「${node.title}」及其 ${childCount - 1} 个子节点分离到新导图吗？`
       : `确认将节点「${node.title}」分离到新导图吗？`;
-    
+
     const accepted = window.confirm(confirmMessage);
     if (!accepted) {
       return;
@@ -7868,7 +7870,7 @@ export class MindmapView extends ItemView {
     // 1. In the note (Markdown text link)
     const backLinkNote = `\n\n---\n\n[← 返回原导图](${this.file.path})`;
     clonedNode.note = (clonedNode.note || "") + backLinkNote;
-    
+
     // 2. Set linkTarget property for immediate visual feedback
     clonedNode.linkTarget = this.file.path;
 
@@ -8342,7 +8344,7 @@ export class MindmapView extends ItemView {
       return false;
     }
     this.captureHistorySnapshot();
-    
+
     // If the markdown doc root has children, add them directly instead of the root itself
     // This avoids creating an extra "center node" wrapper
     if (markdownDoc.root.children.length > 0) {
@@ -8358,7 +8360,7 @@ export class MindmapView extends ItemView {
       this.selectedNodeId = markdownDoc.root.id;
       this.selectedNodeIds = new Set([markdownDoc.root.id]);
     }
-    
+
     targetNode.collapsed = false;
     this.editingNodeId = null;
     this.closeMobileNodeTooltip();
@@ -8484,7 +8486,7 @@ export class MindmapView extends ItemView {
     const imageItems = Array.from(event.clipboardData.items).filter((item) =>
       item.type.startsWith("image/")
     );
-    
+
     // If there are images, handle them
     if (imageItems.length > 0) {
       event.preventDefault();
@@ -8514,7 +8516,7 @@ export class MindmapView extends ItemView {
       }, 600);
       return;
     }
-    
+
     // If no images, allow default paste behavior for text/markdown
     // Don't prevent default - let the browser/CodeMirror handle text paste
   }
@@ -8878,7 +8880,7 @@ export class MindmapView extends ItemView {
         cancel();
       }
     });
-    
+
     // Add input event listener to handle text changes
     input.addEventListener("input", (event) => {
       // During composition, let the browser handle input naturally
@@ -8889,7 +8891,7 @@ export class MindmapView extends ItemView {
       // For non-composition input, no special handling needed
       // The value will be committed on blur or Enter
     });
-    
+
     input.addEventListener("blur", () => {
       commit();
     });

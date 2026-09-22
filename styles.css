@@ -603,6 +603,7 @@
  .mindmap-root-view.is-mobile .mindmap-mobile-redo-button.is-hidden,
  .mindmap-root-view.is-mobile .mindmap-mobile-root-button.is-hidden,
  .mindmap-root-view.is-mobile .mindmap-mobile-delete-button.is-hidden,
+ .mindmap-root-view.is-mobile .mindmap-mobile-search-button.is-hidden,
  .mindmap-root-view.is-mobile .mindmap-mobile-link-button.is-hidden {
    display: none;
  }

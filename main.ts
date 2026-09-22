@@ -130,7 +130,7 @@ class MindmapGlobalSearchModal extends Modal {
       titleEl.createSpan({ cls: "mindmap-global-search-result-node", text: result.nodeTitle || "未命名节点" });
       titleEl.createSpan({
         cls: "mindmap-global-search-result-badge",
-        text: result.matchType === "title" ? "标题" : "笔记"
+        text: result.matchType === "title" ? "节点" : "笔记"
       });
 
       itemEl.createDiv({ cls: "mindmap-global-search-result-excerpt", text: result.excerpt });
