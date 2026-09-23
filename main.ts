@@ -8,6 +8,18 @@ import { MINDMAP_VIEW_TYPE, MindmapView } from "./src/view";
 const PRIMARY_MINDMAP_EXTENSION = "mindmap";
 const LEGACY_MINDMAP_EXTENSION = "mindmap.json";
 const DEBUG_TAB_DEDUPE = true;
+const NON_MINDMAP_OPEN_GUARD_MS = 2500;
+
+type MindmapRuntimeGuard = {
+  path: string;
+  until: number;
+};
+
+declare global {
+  interface Window {
+    __mindmapNotesNonMindmapOpenGuard?: MindmapRuntimeGuard;
+  }
+}
 
 type MindmapSearchMatchType = "title" | "note";
 
@@ -181,41 +193,34 @@ export default class MindmapPlugin extends Plugin {
     this.registerView(MINDMAP_VIEW_TYPE, (leaf) => new MindmapView(leaf));
     this.registerExtensions([PRIMARY_MINDMAP_EXTENSION, LEGACY_MINDMAP_EXTENSION], MINDMAP_VIEW_TYPE);
     this.logTabDebug("plugin-onload");
-    this.scheduleMindmapTabDedupe();
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
-        if (!this.isMindmapFile(file)) {
+        if (!file) {
           return;
         }
+        const isMindmapFile = file.name.endsWith(`.${PRIMARY_MINDMAP_EXTENSION}`) || file.name.endsWith(`.${LEGACY_MINDMAP_EXTENSION}`);
+        if (!isMindmapFile) {
+          window.__mindmapNotesNonMindmapOpenGuard = {
+            path: file.path,
+            until: Date.now() + NON_MINDMAP_OPEN_GUARD_MS
+          };
+          this.logTabDebug("event:file-open:non-mindmap-guard", { file: file.path });
+          return;
+        }
+        window.__mindmapNotesNonMindmapOpenGuard = undefined;
         this.logTabDebug("event:file-open", { file: file.path });
-        this.scheduleMindmapTabDedupe(file);
       })
     );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", (leaf) => {
-        const path = leaf ? this.getAnyLeafPath(leaf) : undefined;
         this.logTabDebug("event:active-leaf-change", {
           debugWanted: "PLEASE_COPY_ALL_WORKSPACE_LEAVES_JSON_AND_VISIBLE_TAB_HEADERS_JSON",
           leafId: leaf ? this.getLeafId(leaf) : null,
           leafType: leaf?.view.getViewType(),
-          path
+          path: leaf ? this.getAnyLeafPath(leaf) : undefined
         });
-        if (!path) {
-          return;
-        }
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (file instanceof TFile && this.isMindmapFile(file)) {
-          this.scheduleMindmapTabDedupe(file);
-        }
       })
     );
-    this.registerEvent(
-      this.app.workspace.on("layout-change", () => {
-        this.logTabDebug("event:layout-change");
-        this.scheduleMindmapTabDedupe();
-      })
-    );
-
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
         const folder = file instanceof TFolder ? file : file?.parent;
@@ -655,15 +660,17 @@ export default class MindmapPlugin extends Plugin {
 
   private async openMindmapFile(file: TFile): Promise<WorkspaceLeaf> {
     const existingLeaf = this.findLeafByFilePath(file.path) ?? this.findMindmapLeafByPath(file.path);
-    // Only reuse existing leaf if it exists; otherwise create a new split
-    const leaf = existingLeaf ?? this.app.workspace.getLeaf(true);
+    const activeLeaf = this.app.workspace.getMostRecentLeaf();
+    const canReuseActiveLeaf = !!activeLeaf && ["empty", MINDMAP_VIEW_TYPE].includes(activeLeaf.view.getViewType());
+    const leaf = existingLeaf ?? (canReuseActiveLeaf ? activeLeaf : this.app.workspace.getLeaf(true));
 
-    // If we're creating a new split (not reusing), mark the protection timestamp
     if (!existingLeaf) {
-      this.lastSplitCreationTime = Date.now();
-      this.logTabDebug("open-mindmap-file:new-split-created", {
+      this.logTabDebug(canReuseActiveLeaf ? "open-mindmap-file:reuse-active-leaf" : "open-mindmap-file:new-leaf", {
         file: file.path,
-        targetLeafId: this.getLeafId(leaf)
+        activeLeafId: this.getLeafId(activeLeaf),
+        activeLeafType: activeLeaf?.view.getViewType(),
+        targetLeafId: this.getLeafId(leaf),
+        targetLeafType: leaf.view.getViewType()
       });
     }
 
@@ -894,16 +901,12 @@ export default class MindmapPlugin extends Plugin {
         });
         this.preferredLeafIds.set(path, this.getLeafId(keeper));
         if (this.getMindmapLeafPath(keeper) !== path) {
-          this.logTabDebug("ensure-unique:convert-keeper", {
+          this.logTabDebug("ensure-unique:skip-convert-non-mindmap-leaf", {
             path,
             keeperId: this.getLeafId(keeper),
             keeperType: keeper.view.getViewType()
           });
-          await keeper.setViewState({
-            type: MINDMAP_VIEW_TYPE,
-            active: true,
-            state: { file: path }
-          });
+          continue;
         }
         for (const leaf of leaves) {
           if (leaf === keeper) {
@@ -1016,13 +1019,9 @@ export default class MindmapPlugin extends Plugin {
       return mindmapPath;
     }
 
-    const viewWithFile = leaf.view as { file?: TFile | null; getState?: () => { file?: string } };
+    const viewWithFile = leaf.view as { file?: TFile | null };
     if (viewWithFile.file instanceof TFile) {
       return viewWithFile.file.path;
-    }
-    const statePath = viewWithFile.getState?.().file;
-    if (statePath) {
-      return statePath;
     }
     return undefined;
   }

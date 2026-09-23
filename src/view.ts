@@ -30,9 +30,31 @@ type ObsidianAppWithPlugins = {
   };
 };
 
+type NoteMediaItem = {
+  type: "image" | "video" | "audio" | "embed";
+  src: string;
+  label: string;
+};
+
 const PRIMARY_MINDMAP_EXTENSION = "mindmap";
 const LEGACY_MINDMAP_EXTENSION = "mindmap.json";
 const ASSOCIATED_MINDMAP_FOLDER_PATH = "思维导图";
+
+type MindmapRuntimeGuard = {
+  path: string;
+  until: number;
+};
+
+type MindmapNewTabIntent = {
+  until: number;
+};
+
+declare global {
+  interface Window {
+    __mindmapNotesNonMindmapOpenGuard?: MindmapRuntimeGuard;
+    __mindmapNotesNewTabIntent?: MindmapNewTabIntent;
+  }
+}
 
 export const MINDMAP_VIEW_TYPE = "mindmap-view";
 
@@ -677,6 +699,10 @@ export class MindmapView extends ItemView {
   private mobileSearchButtonEl!: HTMLButtonElement;
   private mobileZenButtonEl!: HTMLButtonElement;
   private mobileRootButtonEl!: HTMLButtonElement;
+  private mobileMediaInputEl!: HTMLInputElement;
+  private mobileAudioRecording = false;
+  private mobileAudioRecorder: MediaRecorder | null = null;
+  private mobileAudioChunks: Blob[] = [];
   private mobileActionClusterEl!: HTMLDivElement;
   private mobileNodeTooltipEl!: HTMLDivElement;
   private mobileGlobalActionClusterEl!: HTMLDivElement;
@@ -765,6 +791,24 @@ export class MindmapView extends ItemView {
   private aiAppearingNodes = new Map<string, number>();
   private aiChildCreationToken = 0;
   private aiAppearAnimationFrame: number | null = null;
+  private markExplicitNewTabIntent(): void {
+    window.__mindmapNotesNewTabIntent = { until: Date.now() + 1500 };
+  }
+  private readonly onNewTabIntentPointer = (event: PointerEvent): void => {
+    if (event.ctrlKey || event.metaKey) {
+      this.markExplicitNewTabIntent();
+    }
+  };
+  private readonly onNewTabIntentMouse = (event: MouseEvent): void => {
+    if (event.ctrlKey || event.metaKey) {
+      this.markExplicitNewTabIntent();
+    }
+  };
+  private readonly onNewTabIntentKeydown = (event: KeyboardEvent): void => {
+    if (event.ctrlKey || event.metaKey) {
+      this.markExplicitNewTabIntent();
+    }
+  };
   private readonly onGlobalSearchKeydown = (event: KeyboardEvent): void => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== "f") {
       return;
@@ -929,8 +973,6 @@ export class MindmapView extends ItemView {
   }
 
   private activateMindmapLeaf(): void {
-    this.app.workspace.revealLeaf(this.leaf);
-    void this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
     this.focusContainerWithoutScroll();
   }
 
@@ -1658,8 +1700,12 @@ export class MindmapView extends ItemView {
     return this.isZenMode || this.isMobileNoteDrawerOpen();
   }
 
+  private isThisViewActive(): boolean {
+    return this.app.workspace.getActiveViewOfType(ItemView) === this;
+  }
+
   private readonly onWindowTouchStart = (event: TouchEvent): void => {
-    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture()) {
+    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture() || !this.isThisViewActive()) {
       return;
     }
     const target = event.target;
@@ -1693,7 +1739,7 @@ export class MindmapView extends ItemView {
   };
 
   private readonly onWindowTouchMove = (event: TouchEvent): void => {
-    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture()) {
+    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture() || !this.isThisViewActive()) {
       return;
     }
     const target = event.target;
@@ -1727,7 +1773,7 @@ export class MindmapView extends ItemView {
   };
 
   private readonly onWindowTouchEnd = (event: TouchEvent): void => {
-    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture()) {
+    if (!this.isMobileLayout || !this.shouldLockMobileOuterGesture() || !this.isThisViewActive()) {
       return;
     }
     const target = event.target;
@@ -2335,10 +2381,11 @@ export class MindmapView extends ItemView {
     this.containerEl.toggleClass("is-mobile", this.isMobileLayout);
     this.containerEl.tabIndex = 0;
     window.addEventListener("keydown", this.onGlobalSearchKeydown, { capture: true });
+    window.addEventListener("pointerdown", this.onNewTabIntentPointer, { capture: true });
+    window.addEventListener("mousedown", this.onNewTabIntentMouse, { capture: true });
+    window.addEventListener("keydown", this.onNewTabIntentKeydown, { capture: true });
     this.containerEl.addEventListener("keydown", this.onKeydown);
     if (this.isMobileLayout) {
-      this.containerEl.addEventListener("pointerdown", this.activateMindmapLeaf);
-      this.containerEl.addEventListener("touchstart", this.activateMindmapLeaf, { passive: true });
       this.containerEl.addEventListener("touchstart", this.onContainerZenTouchStart, { passive: false, capture: true });
       this.containerEl.addEventListener("touchmove", this.onContainerZenTouchMove, { passive: false, capture: true });
       this.containerEl.addEventListener("touchend", this.onContainerZenTouchEnd, { passive: false, capture: true });
@@ -2475,6 +2522,18 @@ export class MindmapView extends ItemView {
       this.closeMobileNodeTooltip();
       if (this.selectedNodeId) {
         void this.openDrawer(this.selectedNodeId);
+      }
+    });
+    this.mobileMediaInputEl = this.containerEl.createEl("input", {
+      type: "file",
+      attr: { accept: "image/*,video/*,audio/*" }
+    });
+    this.mobileMediaInputEl.style.display = "none";
+    this.mobileMediaInputEl.addEventListener("change", () => {
+      const file = this.mobileMediaInputEl.files?.[0];
+      this.mobileMediaInputEl.value = "";
+      if (file) {
+        void this.insertNoteAttachment(file);
       }
     });
     this.mobileZenButtonEl = mobileGlobalActionClusterEl.createEl("button", { cls: "mindmap-mobile-zen-button", text: "锁住" });
@@ -2671,6 +2730,27 @@ export class MindmapView extends ItemView {
       }
     });
     this.noteToolbarEl = this.drawerEl.createDiv({ cls: "mindmap-mobile-note-toolbar" });
+    const openMobileMediaPicker = (accept: string, capture?: string): void => {
+      this.mobileMediaInputEl.accept = accept;
+      if (capture) {
+        this.mobileMediaInputEl.setAttribute("capture", capture);
+      } else {
+        this.mobileMediaInputEl.removeAttribute("capture");
+      }
+      this.mobileMediaInputEl.click();
+    };
+    const mobilePhotoButton = this.noteToolbarEl.createEl("button", { text: "照片" });
+    mobilePhotoButton.type = "button";
+    mobilePhotoButton.addEventListener("click", () => openMobileMediaPicker("image/*", "environment"));
+    const mobileVideoButton = this.noteToolbarEl.createEl("button", { text: "视频" });
+    mobileVideoButton.type = "button";
+    mobileVideoButton.addEventListener("click", () => openMobileMediaPicker("video/*"));
+    const mobileFileButton = this.noteToolbarEl.createEl("button", { text: "附件" });
+    mobileFileButton.type = "button";
+    mobileFileButton.addEventListener("click", () => openMobileMediaPicker("image/*,video/*,audio/*"));
+    const mobileAudioButton = this.noteToolbarEl.createEl("button", { text: "录音" });
+    mobileAudioButton.type = "button";
+    mobileAudioButton.addEventListener("click", () => void this.toggleMobileAudioRecording());
     [
       { label: "H1", action: "h1" },
       { label: "H2", action: "h2" },
@@ -2911,12 +2991,13 @@ export class MindmapView extends ItemView {
 
   async onClose(): Promise<void> {
     window.removeEventListener("keydown", this.onGlobalSearchKeydown, { capture: true });
+    window.removeEventListener("pointerdown", this.onNewTabIntentPointer, true);
+    window.removeEventListener("mousedown", this.onNewTabIntentMouse, true);
+    window.removeEventListener("keydown", this.onNewTabIntentKeydown, true);
     this.containerEl.removeEventListener("keydown", this.onKeydown);
     this.canvasEl?.removeEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     if (this.isMobileLayout) {
       this.setZenMode(false);
-      this.containerEl.removeEventListener("pointerdown", this.activateMindmapLeaf);
-      this.containerEl.removeEventListener("touchstart", this.activateMindmapLeaf);
       this.containerEl.removeEventListener("touchstart", this.onContainerZenTouchStart, true);
       this.containerEl.removeEventListener("touchmove", this.onContainerZenTouchMove, true);
       this.containerEl.removeEventListener("touchend", this.onContainerZenTouchEnd, true);
@@ -2951,13 +3032,121 @@ export class MindmapView extends ItemView {
     await this.flushSave();
   }
 
+  private shouldAllowDuplicateMindmapTab(): boolean {
+    const intent = window.__mindmapNotesNewTabIntent;
+    if (!intent || Date.now() > intent.until) {
+      return false;
+    }
+    window.__mindmapNotesNewTabIntent = undefined;
+    return true;
+  }
+
+  private detachWorkspaceLeaf(leaf: WorkspaceLeaf): void {
+    const workspace = this.app.workspace as unknown as {
+      detachLeaf?: (leaf: WorkspaceLeaf) => void;
+      removeLeaf?: (leaf: WorkspaceLeaf) => void;
+    };
+    const leafWithDetach = leaf as WorkspaceLeaf & { detach?: () => void };
+    if (typeof workspace.detachLeaf === "function") {
+      workspace.detachLeaf(leaf);
+      return;
+    }
+    if (typeof workspace.removeLeaf === "function") {
+      workspace.removeLeaf(leaf);
+      return;
+    }
+    if (typeof leafWithDetach.detach === "function") {
+      leafWithDetach.detach();
+    }
+  }
+
+  private isSameTabContainer(first: WorkspaceLeaf, second: WorkspaceLeaf): boolean {
+    const firstParent = (first as WorkspaceLeaf & { parent?: unknown }).parent;
+    const secondParent = (second as WorkspaceLeaf & { parent?: unknown }).parent;
+    return !!firstParent && firstParent === secondParent;
+  }
+
+  private async redirectDuplicateMindmapOpen(path: string): Promise<boolean> {
+    if (this.shouldAllowDuplicateMindmapTab()) {
+      return false;
+    }
+    const existingLeaf = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).find((leaf) => {
+      if (leaf === this.leaf) {
+        return false;
+      }
+      const view = leaf.view;
+      return view instanceof MindmapView
+        && normalizePath(view.getState().file ?? "") === normalizePath(path)
+        && this.isSameTabContainer(this.leaf, leaf);
+    });
+    if (!existingLeaf) {
+      return false;
+    }
+    this.app.workspace.revealLeaf(existingLeaf);
+    this.file = null;
+    this.doc = null;
+    this.detachWorkspaceLeaf(this.leaf);
+    return true;
+  }
+
+  private focusGuardedNonMindmapLeaf(path: string): boolean {
+    const workspace = this.app.workspace as unknown as {
+      iterateAllLeaves?: (callback: (leaf: WorkspaceLeaf) => void) => void;
+    };
+    const focusLeaf = (leaf: WorkspaceLeaf): boolean => {
+      const viewWithFile = leaf.view as { file?: TFile | null };
+      if (viewWithFile.file instanceof TFile && normalizePath(viewWithFile.file.path) === normalizePath(path)) {
+        this.app.workspace.revealLeaf(leaf);
+        return true;
+      }
+      return false;
+    };
+    if (typeof workspace.iterateAllLeaves === "function") {
+      let found = false;
+      workspace.iterateAllLeaves((leaf) => {
+        if (!found) {
+          found = focusLeaf(leaf);
+        }
+      });
+      return found;
+    }
+    const activeLeaf = this.app.workspace.getMostRecentLeaf();
+    return activeLeaf ? focusLeaf(activeLeaf) : false;
+  }
+
+  private async restoreGuardedNonMindmapFile(path: string): Promise<void> {
+    if (this.focusGuardedNonMindmapLeaf(path)) {
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
+    if (!(file instanceof TFile) || this.isMindmapFile(file)) {
+      return;
+    }
+    this.file = null;
+    this.doc = null;
+    await this.leaf.openFile(file, { active: true });
+    this.app.workspace.revealLeaf(this.leaf);
+  }
+
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
     console.log('[MindmapView] 📥 setState called:', state);
-    await super.setState(state, result);
     const nextState = (state ?? {}) as { file?: string; focusLinkedFrom?: string };
     const path = nextState.file;
     if (!path) {
       console.warn('[MindmapView] ⚠️ setState called without file path');
+      await super.setState(state, result);
+      return;
+    }
+    const preflightFile = this.app.vault.getAbstractFileByPath(path);
+    if (preflightFile instanceof TFile && this.isMindmapFile(preflightFile) && await this.redirectDuplicateMindmapOpen(preflightFile.path)) {
+      console.log('[MindmapView] ↩️ Preflight redirected duplicate mindmap tab to existing leaf:', preflightFile.path);
+      return;
+    }
+    await super.setState(state, result);
+    const nonMindmapGuard = window.__mindmapNotesNonMindmapOpenGuard;
+    if (nonMindmapGuard && Date.now() <= nonMindmapGuard.until && normalizePath(nonMindmapGuard.path) !== normalizePath(path)) {
+      console.warn('[MindmapView] ⚠️ Blocking mindmap setState during non-mindmap open:', { blockedPath: path, guardedPath: nonMindmapGuard.path });
+      await this.restoreGuardedNonMindmapFile(nonMindmapGuard.path);
       return;
     }
     this.pendingFocusLinkedFromPath = nextState.focusLinkedFrom ? normalizePath(nextState.focusLinkedFrom) : null;
@@ -2965,6 +3154,14 @@ export class MindmapView extends ItemView {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
       console.error('[MindmapView] ❌ File not found:', path);
+      return;
+    }
+    if (!this.isMindmapFile(file)) {
+      console.warn('[MindmapView] ⚠️ Refusing to load non-mindmap file:', path);
+      this.file = null;
+      this.doc = null;
+      this.closeDrawer();
+      this.renderMindmap();
       return;
     }
     console.log('[MindmapView] 📄 Loading file:', path);
@@ -2983,11 +3180,11 @@ export class MindmapView extends ItemView {
   }
 
   setFile(file: TFile): void {
-    this.file = file;
+    this.file = this.isMindmapFile(file) ? file : null;
   }
 
   private async loadFromFile(): Promise<void> {
-    if (!this.file) {
+    if (!this.file || !this.isMindmapFile(this.file)) {
       this.doc = null;
       if (this.isMobileLayout) {
         this.setZenMode(false);
@@ -3971,8 +4168,8 @@ export class MindmapView extends ItemView {
       const size = this.ensureNodeSize(candidate);
       const anchorX = candidate.x + size.width / 2;
       const anchorY = candidate.y;
-      const deltaX = anchorNode.x - anchorX;
-      const deltaY = anchorNode.y - anchorY;
+      const deltaX = movingNode.x - anchorX;
+      const deltaY = movingNode.y - anchorY;
       const distance = Math.hypot(deltaX, deltaY);
       const edgeThreshold = Math.max(42, size.height * 0.9);
       if (distance > edgeThreshold || distance >= bestDistance) {
@@ -3999,8 +4196,8 @@ export class MindmapView extends ItemView {
     return sanitized || "未命名导图";
   }
 
-  private isMindmapFile(file: TFile): boolean {
-    return file.name.endsWith(`.${PRIMARY_MINDMAP_EXTENSION}`) || file.name.endsWith(`.${LEGACY_MINDMAP_EXTENSION}`);
+  private isMindmapFile(file: TFile | null): file is TFile {
+    return !!file && (file.name.endsWith(`.${PRIMARY_MINDMAP_EXTENSION}`) || file.name.endsWith(`.${LEGACY_MINDMAP_EXTENSION}`));
   }
 
   private getMindmapObsidianUrl(file: TFile): string {
@@ -4900,17 +5097,25 @@ export class MindmapView extends ItemView {
       processedLinks.add(linkEl);
       const embedEl = document.createElement("div");
       embedEl.className = `mindmap-note-preview-media is-${item.type}`;
-      const mediaEl = document.createElement(item.type === "video" ? "video" : "iframe");
-      mediaEl.setAttribute("src", item.src);
-      if (mediaEl instanceof HTMLVideoElement) {
-        mediaEl.controls = true;
-        mediaEl.preload = "metadata";
-        mediaEl.setAttribute("playsinline", "true");
+      if (item.type === "audio") {
+        const audioEl = document.createElement("audio");
+        audioEl.setAttribute("src", item.src);
+        audioEl.controls = true;
+        audioEl.preload = "metadata";
+        embedEl.appendChild(audioEl);
       } else {
-        mediaEl.setAttribute("allow", "encrypted-media; picture-in-picture");
-        mediaEl.setAttribute("allowfullscreen", "true");
+        const mediaEl = document.createElement(item.type === "video" ? "video" : "iframe");
+        mediaEl.setAttribute("src", item.src);
+        if (mediaEl instanceof HTMLVideoElement) {
+          mediaEl.controls = true;
+          mediaEl.preload = "metadata";
+          mediaEl.setAttribute("playsinline", "true");
+        } else {
+          mediaEl.setAttribute("allow", "encrypted-media; picture-in-picture");
+          mediaEl.setAttribute("allowfullscreen", "true");
+        }
+        embedEl.appendChild(mediaEl);
       }
-      embedEl.appendChild(mediaEl);
       const captionEl = document.createElement("div");
       captionEl.className = "mindmap-note-preview-media-caption";
       captionEl.textContent = item.label;
@@ -5921,7 +6126,7 @@ export class MindmapView extends ItemView {
     return null;
   }
 
-  private getNoteMediaItemFromTarget(rawTarget: string, label = rawTarget): { type: "image" | "video" | "embed"; src: string; label: string } | null {
+  private getNoteMediaItemFromTarget(rawTarget: string, label = rawTarget): NoteMediaItem | null {
     const cleanedTarget = rawTarget.split("|")[0]?.trim() ?? "";
     const src = this.getNoteMediaResourceUrl(cleanedTarget);
     if (!src) {
@@ -5929,16 +6134,17 @@ export class MindmapView extends ItemView {
     }
     const imageExt = /\.(png|jpe?g|gif|webp|svg|bmp|avif)(\?|#|$)/i;
     const videoExt = /\.(mp4|webm|mov|m4v|ogv)(\?|#|$)/i;
+    const audioExt = /\.(mp3|m4a|aac|wav|ogg|oga|opus|webm)(\?|#|$)/i;
     const embedSrc = /^https?:\/\//i.test(src) ? this.getVideoEmbedUrl(src) : null;
-    const type = embedSrc ? "embed" : videoExt.test(cleanedTarget) || videoExt.test(src) ? "video" : imageExt.test(cleanedTarget) || imageExt.test(src) ? "image" : null;
+    const type = embedSrc ? "embed" : videoExt.test(cleanedTarget) || videoExt.test(src) ? "video" : audioExt.test(cleanedTarget) || audioExt.test(src) ? "audio" : imageExt.test(cleanedTarget) || imageExt.test(src) ? "image" : null;
     if (!type) {
       return null;
     }
     return { type, src: embedSrc ?? src, label: label.trim() || cleanedTarget };
   }
 
-  private extractNoteMediaItems(markdown: string): Array<{ type: "image" | "video" | "embed"; src: string; label: string }> {
-    const items: Array<{ type: "image" | "video" | "embed"; src: string; label: string }> = [];
+  private extractNoteMediaItems(markdown: string): NoteMediaItem[] {
+    const items: NoteMediaItem[] = [];
     const seen = new Set<string>();
     const addItem = (rawTarget: string, label = rawTarget): void => {
       const item = this.getNoteMediaItemFromTarget(rawTarget, label);
@@ -5976,17 +6182,33 @@ export class MindmapView extends ItemView {
       return;
     }
     this.noteEditingMediaPreviewEl.empty();
-    this.noteEditingMediaPreviewEl.addClass("is-empty");
+    const items = this.extractNoteMediaItems(markdown);
+    this.noteEditingMediaPreviewEl.toggleClass("is-empty", items.length === 0);
+    items.forEach((item) => {
+      const itemEl = this.noteEditingMediaPreviewEl.createDiv({ cls: `mindmap-note-editing-media-item is-${item.type}` });
+      if (item.type === "image") {
+        itemEl.createEl("img", { attr: { src: item.src, alt: item.label } });
+      } else if (item.type === "video") {
+        const videoEl = itemEl.createEl("video", { attr: { src: item.src, preload: "metadata" } });
+        videoEl.controls = true;
+        videoEl.setAttribute("playsinline", "true");
+      } else if (item.type === "audio") {
+        itemEl.createEl("audio", { attr: { src: item.src, controls: "true", preload: "metadata" } });
+      } else {
+        itemEl.createEl("iframe", { attr: { src: item.src, allow: "encrypted-media; picture-in-picture", allowfullscreen: "true" } });
+      }
+      itemEl.createDiv({ cls: "mindmap-note-editing-media-label", text: item.label });
+    });
   }
 
-  private findNoteMediaItemAtEditorPosition(position: number): { type: "image" | "video" | "embed"; src: string; label: string } | null {
+  private findNoteMediaItemAtEditorPosition(position: number): NoteMediaItem | null {
     if (!this.noteEditorView) {
       return null;
     }
     const line = this.noteEditorView.state.doc.lineAt(position);
     const lineText = line.text;
     const offset = position - line.from;
-    const scan = (regex: RegExp, targetIndex: number, labelIndex: number): { type: "image" | "video" | "embed"; src: string; label: string } | null => {
+    const scan = (regex: RegExp, targetIndex: number, labelIndex: number): NoteMediaItem | null => {
       regex.lastIndex = 0;
       for (const match of lineText.matchAll(regex)) {
         const start = match.index ?? 0;
@@ -6052,7 +6274,7 @@ export class MindmapView extends ItemView {
     this.noteMediaPopoverDrag = null;
   }
 
-  private showNoteMediaPopover(item: { type: "image" | "video" | "embed"; src: string; label: string }, clientX: number, clientY: number): void {
+  private showNoteMediaPopover(item: NoteMediaItem, clientX: number, clientY: number): void {
     if (this.noteMediaPopoverHideTimer !== null) {
       window.clearTimeout(this.noteMediaPopoverHideTimer);
       this.noteMediaPopoverHideTimer = null;
@@ -6078,6 +6300,8 @@ export class MindmapView extends ItemView {
     } else if (item.type === "video") {
       const videoEl = mediaEl.createEl("video", { attr: { src: item.src, controls: "true", preload: "metadata" } });
       videoEl.setAttribute("playsinline", "true");
+    } else if (item.type === "audio") {
+      mediaEl.createEl("audio", { attr: { src: item.src, controls: "true", preload: "metadata" } });
     } else {
       mediaEl.createEl("iframe", { attr: { src: item.src, allow: "encrypted-media; picture-in-picture", allowfullscreen: "true" } });
     }
@@ -7012,6 +7236,12 @@ export class MindmapView extends ItemView {
       return `![](${resourceUrl})`;
     });
 
+    // Normalize bare URLs before Obsidian renders the note so pasted links are clickable immediately.
+    processed = processed.replace(/(^|[\s(])((?:https?:\/\/|www\.)[^\s<]+)(?=$|[\s),.!?])/g, (full, prefix: string, rawUrl: string) => {
+      const url = rawUrl.startsWith("www.") ? `https://${rawUrl}` : rawUrl;
+      return `${prefix}[${rawUrl}](${url})`;
+    });
+
     // Then, process footnote-style comments: [^c1::original text]
     // Replace with the original text wrapped in a clickable highlighted span
     processed = processed.replace(/\[\^([a-zA-Z0-9]+)::([^\]]+)\]/g, (match, footnoteId, originalText) => {
@@ -7218,8 +7448,19 @@ export class MindmapView extends ItemView {
     const normalized = normalizePath(linktext);
     const sourcePath = this.file?.path ?? "";
     try {
-      await this.app.workspace.openLinkText(normalized, sourcePath, inNewTab);
       const resolved = this.app.metadataCache.getFirstLinkpathDest(normalized, sourcePath);
+      if (resolved instanceof TFile && !(resolved.name.endsWith(`.${PRIMARY_MINDMAP_EXTENSION}`) || resolved.name.endsWith(`.${LEGACY_MINDMAP_EXTENSION}`))) {
+        const resolvedPath = resolved.path;
+        const leaf = this.app.workspace.getLeaf(inNewTab ? true : false);
+        await leaf.openFile(resolved, { active: true });
+        this.app.workspace.revealLeaf(leaf);
+        const currentPath = this.file?.path;
+        if (currentPath && currentPath !== resolvedPath) {
+          this.navigationStack.push(resolvedPath);
+        }
+        return;
+      }
+      await this.app.workspace.openLinkText(normalized, sourcePath, inNewTab);
       if (resolved instanceof TFile) {
         const currentPath = this.file?.path;
         if (currentPath && currentPath !== resolved.path) {
@@ -7262,8 +7503,9 @@ export class MindmapView extends ItemView {
         return view instanceof MindmapView && view.getState().file === target.path;
       });
       const activeLeaf = this.app.workspace.getMostRecentLeaf();
-      const existingLeaf = existingLeaves.find((leaf) => leaf === activeLeaf) ?? existingLeaves[0] ?? null;
-      const targetLeaf = existingLeaf ?? (inNewTab ? this.app.workspace.getLeaf(true) : this.leaf);
+      const existingLeaf = inNewTab ? null : (existingLeaves.find((leaf) => leaf === activeLeaf) ?? existingLeaves[0] ?? null);
+      const canReuseCurrentLeaf = this.leaf.view.getViewType() === MINDMAP_VIEW_TYPE;
+      const targetLeaf = existingLeaf ?? (inNewTab || !canReuseCurrentLeaf ? this.app.workspace.getLeaf(true) : this.leaf);
 
       await targetLeaf.setViewState({
         type: MINDMAP_VIEW_TYPE,
@@ -7308,7 +7550,7 @@ export class MindmapView extends ItemView {
       const plugins = (this.app as any).plugins?.plugins;
       if (plugins) {
         const plugin: any = Object.values(plugins).find((p: any) =>
-          p?.manifest?.id === 'obsidian-note-mind'
+          p?.manifest?.id === 'mindmap-notes'
         );
         if (plugin && typeof plugin.markSplitCreation === 'function') {
           const leafId = (leaf as any).id;
@@ -8313,6 +8555,10 @@ export class MindmapView extends ItemView {
   }
 
   private shouldTreatClipboardAsMindmapMarkdown(markdownText: string): boolean {
+    const trimmed = markdownText.trim();
+    if (/^!?\[\[[^\]]+\]\]$/.test(trimmed) || /^!?\[[^\]]*\]\([^\)]+\)$/.test(trimmed) || /^https?:\/\/\S+$/i.test(trimmed) || /^obsidian:\/\/\S+$/i.test(trimmed)) {
+      return false;
+    }
     const doc = this.markdownToMindmapDocument(markdownText);
     if (!doc) {
       return false;
@@ -8464,7 +8710,7 @@ export class MindmapView extends ItemView {
       }
       return;
     }
-    if (clipboardText.trim().length > 0 && this.markdownToMindmapDocument(clipboardText) !== null) {
+    if (clipboardText.trim().length > 0 && this.shouldTreatClipboardAsMindmapMarkdown(clipboardText)) {
       this.clearClipboardPayload();
       const handled = await this.applyMarkdownTextAsMindmap(clipboardText, true, true);
       if (handled) {
@@ -8667,8 +8913,44 @@ export class MindmapView extends ItemView {
     return `![[${targetPath}]]`;
   }
 
-  private setNoteEditing(editing: boolean, cursorPosition?: number): void {
+  private async insertNoteAttachment(file: File): Promise<void> {
+    if (!this.file || !this.doc || !this.selectedNodeId) {
+      new Notice("请先选择节点并保存导图");
+      return;
+    }
+    const targetPath = await this.app.fileManager.getAvailablePathForAttachment(file.name, this.file.parent?.path ?? "");
+    await this.app.vault.createBinary(targetPath, await file.arrayBuffer());
+    const markdown = `${this.getCurrentNoteEditorValue().trimEnd()}\n\n![[${targetPath}]]\n`;
+    this.handleNoteEditorInput(markdown);
+    this.setNoteEditing(true);
+  }
 
+  private async toggleMobileAudioRecording(): Promise<void> {
+    if (this.mobileAudioRecording && this.mobileAudioRecorder) {
+      this.mobileAudioRecorder.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      new Notice("当前设备不支持录音");
+      return;
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.mobileAudioChunks = [];
+    this.mobileAudioRecorder = new MediaRecorder(stream);
+    this.mobileAudioRecorder.ondataavailable = (event) => this.mobileAudioChunks.push(event.data);
+    this.mobileAudioRecorder.onstop = () => {
+      stream.getTracks().forEach((track) => track.stop());
+      const blob = new Blob(this.mobileAudioChunks, { type: this.mobileAudioRecorder?.mimeType || "audio/webm" });
+      const file = new File([blob], `录音-${Date.now()}.webm`, { type: blob.type });
+      this.mobileAudioRecording = false;
+      this.mobileAudioRecorder = null;
+      void this.insertNoteAttachment(file);
+    };
+    this.mobileAudioRecorder.start();
+    this.mobileAudioRecording = true;
+    new Notice("正在录音，再次点击停止");
+  }
+  private setNoteEditing(editing: boolean, cursorPosition?: number): void {
     this.hideCommentsPanel();
 
     if (editing === this.noteSurfaceEl.hasClass("is-editing")) {
