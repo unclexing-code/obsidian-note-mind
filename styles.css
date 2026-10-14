@@ -2339,14 +2339,32 @@
  }
 
  /* AI Generate Child Nodes Modal */
+ .mindmap-ai-generate-drag-handle {
+   cursor: move;
+   user-select: none;
+   touch-action: none;
+ }
+
+ .mindmap-ai-generate-drag-handle:active {
+   cursor: grabbing;
+ }
+
  .mindmap-ai-generate-modal {
    display: flex;
    flex-direction: column;
    gap: 12px;
+   max-height: calc(100vh - 32px);
+   overflow: auto;
  }
 
  .modal:has(.mindmap-ai-generate-modal) {
    width: min(560px, calc(100vw - 32px));
+   min-width: min(420px, calc(100vw - 24px));
+   min-height: 360px;
+   max-width: calc(100vw - 24px);
+   max-height: calc(100vh - 24px);
+   resize: both;
+   overflow: auto;
  }
 
  .mindmap-ai-generate-modal h2 {
@@ -2834,11 +2852,146 @@
    text-align: center;
  }
 
- .mindmap-ai-generate-preview-list {
+ .mindmap-ai-generate-preview-tree {
+   position: relative;
+   height: min(360px, 38vh);
+   min-height: 220px;
+   max-height: none;
+   overflow: auto;
+   padding: 14px;
+   overscroll-behavior: contain;
+   touch-action: pan-x pan-y;
+   cursor: grab;
+ }
+
+ .mindmap-ai-generate-preview-tree:active {
+   cursor: grabbing;
+ }
+
+ .mindmap-ai-generate-zoom-toolbar {
+   position: sticky;
+   z-index: 2;
+   top: 0;
+   display: flex;
+   justify-content: flex-end;
+   align-items: center;
+   gap: 6px;
+   width: max-content;
+   margin: 0 0 10px auto;
+   padding: 5px;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 8px;
+   background: var(--background-primary);
+   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+ }
+
+ .mindmap-ai-generate-zoom-toolbar button {
+   min-width: 32px;
+   height: 30px;
+   padding: 0 8px;
+ }
+
+ .mindmap-ai-generate-zoom-label {
+   min-width: 42px;
+   color: var(--text-muted);
+   font-size: var(--font-ui-smaller);
+   text-align: center;
+ }
+
+ .mindmap-ai-generate-preview-content {
+   width: max-content;
+   min-width: 100%;
+   transform-origin: top left;
+ }
+
+ .mindmap-ai-generate-preview-tree:fullscreen {
+   width: 100vw;
+   height: 100vh;
+   max-height: none;
+   padding: 20px;
+   border: 0;
+   border-radius: 0;
+   background: var(--background-primary);
+ }
+
+ .mindmap-ai-generate-preview-tree:fullscreen .mindmap-ai-generate-zoom-toolbar {
+   position: fixed;
+   top: 12px;
+   right: 18px;
+ }
+
+ .mindmap-ai-generate-preview-tree:fullscreen .mindmap-ai-generate-preview-content {
+   padding-top: 48px;
+ }
+
+ .mindmap-ai-generate-preview-branch {
+   display: flex;
+   align-items: center;
+   width: max-content;
+   min-width: 100%;
+ }
+
+ .mindmap-ai-generate-preview-root {
+   display: flex;
+   flex: 0 0 220px;
+   flex-direction: column;
+   justify-content: center;
+   gap: 6px;
+   min-height: 58px;
+   margin-right: 28px;
+   padding: 10px 12px;
+   border: 1px solid var(--interactive-accent);
+   border-radius: 8px;
+   background: var(--background-primary);
+ }
+
+ .mindmap-ai-generate-preview-root-marker {
+   color: var(--text-muted);
+   font-size: var(--font-ui-smaller);
+ }
+
+ .mindmap-ai-generate-preview-children {
    display: flex;
    flex-direction: column;
-   max-height: 320px;
-   overflow-y: auto;
+   justify-content: center;
+   gap: 14px;
+   padding-left: 24px;
+   border-left: 1px solid var(--background-modifier-border);
+ }
+
+ .mindmap-ai-generate-preview-row {
+   position: relative;
+   display: grid;
+   flex: 0 0 220px;
+   grid-template-columns: auto 1fr;
+   align-items: center;
+   gap: 8px;
+   width: 220px;
+   min-height: 46px;
+   padding: 6px 9px;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 6px;
+   background: var(--background-primary);
+ }
+
+ .mindmap-ai-generate-preview-row::before {
+   position: absolute;
+   right: 100%;
+   width: 24px;
+   border-top: 1px solid var(--background-modifier-border);
+   content: "";
+ }
+
+ .mindmap-ai-generate-preview-row:hover {
+   border-color: var(--interactive-accent);
+ }
+
+ .mindmap-ai-generate-preview-checkbox {
+   margin: 0;
+ }
+
+ .mindmap-ai-generate-preview-input {
+   width: 100%;
  }
 
  .mindmap-ai-generate-preview-row {

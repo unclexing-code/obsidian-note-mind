@@ -5,7 +5,7 @@ import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { markdown } from "@codemirror/lang-markdown";
 import { searchKeymap } from "@codemirror/search";
 import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, TFile, TFolder, normalizePath, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
-import { generateChildNodeTitles, serializeMindmapContext } from "./llm";
+import { generateChildNodeTitles, serializeMindmapContext, type GeneratedMindmapNode } from "./llm";
 import { addChildNode, findNodeById, findParentOfNode, normalizeMindmapDocument, removeNode, reorderNodeWithinParent, reparentNode, visibleNodes, walkNodes } from "./store";
 import { getMindmapPlugin, llmProviderRequiresApiKey } from "./settings";
 import { createDefaultMindmap, type MindmapDocument, type MindmapNode, type MindmapNodeLink, type MindmapComment } from "./types";
@@ -177,23 +177,40 @@ class MindmapAiGenerateModal extends Modal {
   private previewEl!: HTMLDivElement;
   private generateBtn!: HTMLButtonElement;
   private confirmBtn!: HTMLButtonElement;
-  private previewItems: Array<{ checkbox: HTMLInputElement; input: HTMLInputElement }> = [];
+  private previewScale = 1;
+  private previewOffsetX = 0;
+  private previewOffsetY = 0;
+  private previewCanvasEl: HTMLDivElement | null = null;
+  private previewTreeEl: HTMLDivElement | null = null;
+  private previewFullscreenHandler: (() => void) | null = null;
+  private backdropPointerHandler: ((event: Event) => void) | null = null;
+  private previewItems: Array<{ checkbox: HTMLInputElement; input: HTMLInputElement; node: GeneratedMindmapNode }> = [];
 
   constructor(
     app: App,
     private readonly nodeTitle: string,
-    private readonly onGenerate: (userPrompt: string) => Promise<string[]>,
-    private readonly onConfirm: (titles: string[]) => void
+    private readonly onGenerate: (userPrompt: string) => Promise<GeneratedMindmapNode[]>,
+    private readonly onConfirm: (nodes: GeneratedMindmapNode[]) => void
   ) {
     super(app);
   }
 
   onOpen(): void {
+    this.containerEl.addClass("mindmap-ai-generate-modal-container");
+    this.backdropPointerHandler = (event: Event): void => {
+      const target = event.target;
+      if (target instanceof Node && !this.modalEl.contains(target)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener("pointerdown", this.backdropPointerHandler, true);
+    document.addEventListener("mousedown", this.backdropPointerHandler, true);
+    document.addEventListener("click", this.backdropPointerHandler, true);
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("mindmap-ai-generate-modal");
-
-    contentEl.createEl("h2", { text: "AI 生成子节点" });
+    this.enableDragging(contentEl.createEl("h2", { text: "AI 生成子节点" }));
 
     const contextEl = contentEl.createDiv({ cls: "mindmap-ai-generate-context" });
     contextEl.createEl("span", { cls: "mindmap-ai-generate-context-label", text: "目标节点：" });
@@ -233,12 +250,12 @@ class MindmapAiGenerateModal extends Modal {
     this.confirmBtn.type = "button";
     this.confirmBtn.disabled = true;
     this.confirmBtn.addEventListener("click", () => {
-      const selectedTitles = this.getSelectedTitles();
-      if (selectedTitles.length === 0) {
+      const selectedNodes = this.getSelectedNodes();
+      if (selectedNodes.length === 0) {
         new Notice("请至少勾选 1 个要生成的子节点");
         return;
       }
-      this.onConfirm(selectedTitles);
+      this.onConfirm(selectedNodes);
       this.close();
     });
 
@@ -267,8 +284,8 @@ class MindmapAiGenerateModal extends Modal {
     this.renderPreview([], "正在生成预览...");
 
     try {
-      const titles = await this.onGenerate(userPrompt);
-      this.renderPreview(titles);
+      const nodes = await this.onGenerate(userPrompt);
+      this.renderPreview(nodes);
     } finally {
       this.generateBtn.disabled = false;
       this.generateBtn.setText("重新生成预览");
@@ -276,13 +293,22 @@ class MindmapAiGenerateModal extends Modal {
     }
   }
 
-  private renderPreview(titles: string[], emptyText = "生成后会在这里显示结果预览"): void {
+  private renderPreview(nodes: GeneratedMindmapNode[], emptyText = "生成后会在这里显示结果预览"): void {
+    if (this.previewFullscreenHandler) {
+      document.removeEventListener("fullscreenchange", this.previewFullscreenHandler);
+      this.previewFullscreenHandler = null;
+    }
+    if (document.fullscreenElement && this.previewCanvasEl?.contains(document.fullscreenElement)) {
+      void document.exitFullscreen();
+    }
+    this.previewCanvasEl = null;
+    this.previewTreeEl = null;
     this.previewEl.empty();
     this.previewItems = [];
 
     const headerEl = this.previewEl.createDiv({ cls: "mindmap-ai-generate-preview-header" });
-    headerEl.createEl("span", { text: "结果预览" });
-    if (titles.length > 0) {
+    headerEl.createEl("span", { text: "思维导图预览" });
+    if (nodes.length > 0) {
       const toolsEl = headerEl.createDiv({ cls: "mindmap-ai-generate-preview-tools" });
       const selectAllBtn = toolsEl.createEl("button", { text: "全选" });
       selectAllBtn.type = "button";
@@ -292,29 +318,184 @@ class MindmapAiGenerateModal extends Modal {
       clearBtn.addEventListener("click", () => this.setAllPreviewItemsChecked(false));
     }
 
-    if (titles.length === 0) {
+    if (nodes.length === 0) {
       this.previewEl.createDiv({ cls: "mindmap-ai-generate-preview-empty", text: emptyText });
       this.updateConfirmButtonState();
       return;
     }
 
-    const listEl = this.previewEl.createDiv({ cls: "mindmap-ai-generate-preview-list" });
-    titles.forEach((title, index) => {
-      const rowEl = listEl.createDiv({ cls: "mindmap-ai-generate-preview-row" });
-      const checkbox = rowEl.createEl("input", { cls: "mindmap-ai-generate-preview-checkbox", type: "checkbox" });
-      checkbox.checked = true;
-      checkbox.title = "是否生成这个子节点";
-      const input = rowEl.createEl("input", {
-        cls: "mindmap-ai-generate-preview-input",
-        type: "text",
-        value: title,
-        attr: { "aria-label": `预览子节点 ${index + 1}` }
-      });
-      checkbox.addEventListener("change", () => this.updateConfirmButtonState());
-      input.addEventListener("input", () => this.updateConfirmButtonState());
-      this.previewItems.push({ checkbox, input });
+    const treeEl = this.previewEl.createDiv({ cls: "mindmap-ai-generate-preview-tree" });
+    const toolbarEl = this.previewEl.createDiv({ cls: "mindmap-ai-generate-zoom-toolbar" });
+    const zoomOutBtn = toolbarEl.createEl("button", { text: "−", attr: { "aria-label": "缩小预览", title: "缩小" } });
+    const zoomLabel = toolbarEl.createEl("span", { cls: "mindmap-ai-generate-zoom-label", text: "100%" });
+    const zoomInBtn = toolbarEl.createEl("button", { text: "+", attr: { "aria-label": "放大预览", title: "放大" } });
+    const resetZoomBtn = toolbarEl.createEl("button", { text: "适应", attr: { title: "恢复默认比例" } });
+    const fullscreenBtn = toolbarEl.createEl("button", { text: "全屏", attr: { title: "全屏预览" } });
+    this.previewCanvasEl = treeEl;
+    this.previewScale = 1;
+    this.previewOffsetX = 0;
+    this.previewOffsetY = 0;
+    const applyViewTransform = (): void => {
+      if (this.previewTreeEl) {
+        this.previewTreeEl.style.transform = `translate(${this.previewOffsetX}px, ${this.previewOffsetY}px) scale(${this.previewScale})`;
+      }
+      zoomLabel.setText(`${Math.round(this.previewScale * 100)}%`);
+    };
+    treeEl.addEventListener("wheel", (event: WheelEvent) => {
+      if (event.metaKey || event.ctrlKey) {
+        event.preventDefault();
+        const rect = treeEl.getBoundingClientRect();
+        const pointerX = event.clientX - rect.left;
+        const pointerY = event.clientY - rect.top;
+        const previousScale = this.previewScale;
+        const nextScale = Math.min(3, Math.max(0.25, previousScale * Math.exp(-event.deltaY * 0.006)));
+        const contentX = (pointerX - this.previewOffsetX) / previousScale;
+        const contentY = (pointerY - this.previewOffsetY) / previousScale;
+        this.previewScale = nextScale;
+        this.previewOffsetX = pointerX - contentX * nextScale;
+        this.previewOffsetY = pointerY - contentY * nextScale;
+        applyViewTransform();
+        return;
+      }
+      event.preventDefault();
+      this.previewOffsetX -= event.deltaX;
+      this.previewOffsetY -= event.deltaY;
+      applyViewTransform();
+    }, { passive: false });
+    treeEl.addEventListener("pointerdown", (event: PointerEvent) => {
+      if (event.button !== 0 || (event.target instanceof HTMLElement && event.target.closest("input, button"))) {
+        return;
+      }
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const originX = this.previewOffsetX;
+      const originY = this.previewOffsetY;
+      treeEl.setPointerCapture(event.pointerId);
+      const move = (moveEvent: PointerEvent): void => {
+        this.previewOffsetX = originX + moveEvent.clientX - startX;
+        this.previewOffsetY = originY + moveEvent.clientY - startY;
+        applyViewTransform();
+      };
+      const finish = (): void => {
+        treeEl.removeEventListener("pointermove", move);
+        treeEl.removeEventListener("pointerup", finish);
+        treeEl.removeEventListener("pointercancel", finish);
+      };
+      treeEl.addEventListener("pointermove", move);
+      treeEl.addEventListener("pointerup", finish);
+      treeEl.addEventListener("pointercancel", finish);
     });
+    const applyScale = (): void => {
+      this.previewOffsetX = 0;
+      this.previewOffsetY = 0;
+      applyViewTransform();
+    };
+    zoomOutBtn.addEventListener("click", () => {
+      this.previewScale = Math.max(0.25, Math.round((this.previewScale - 0.1) * 10) / 10);
+      applyScale();
+    });
+    zoomInBtn.addEventListener("click", () => {
+      this.previewScale = Math.min(3, Math.round((this.previewScale + 0.1) * 10) / 10);
+      applyScale();
+    });
+    resetZoomBtn.addEventListener("click", () => {
+      this.previewScale = 1;
+      applyScale();
+    });
+    fullscreenBtn.addEventListener("click", () => {
+      if (document.fullscreenElement === this.previewCanvasEl) {
+        void document.exitFullscreen();
+      } else {
+        void this.previewCanvasEl?.requestFullscreen();
+      }
+    });
+    this.previewFullscreenHandler = () => {
+      const isFullscreen = document.fullscreenElement === this.previewCanvasEl;
+      fullscreenBtn.setText(isFullscreen ? "退出全屏" : "全屏");
+      treeEl.classList.toggle("is-fullscreen", isFullscreen);
+    };
+    document.addEventListener("fullscreenchange", this.previewFullscreenHandler);
+    const rootBranchEl = treeEl.createDiv({ cls: "mindmap-ai-generate-preview-branch mindmap-ai-generate-preview-content" });
+    this.previewTreeEl = rootBranchEl;
+    const rootRow = rootBranchEl.createDiv({ cls: "mindmap-ai-generate-preview-root" });
+    rootRow.createEl("span", { cls: "mindmap-ai-generate-preview-root-marker", text: "当前节点" });
+    rootRow.createEl("strong", { text: this.nodeTitle.trim() || "未命名节点" });
+    const generatedListEl = rootBranchEl.createDiv({ cls: "mindmap-ai-generate-preview-children" });
+    nodes.forEach((node, index) => this.renderPreviewNode(generatedListEl, node, 0, `${index + 1}`));
     this.updateConfirmButtonState();
+  }
+
+  private renderPreviewNode(
+    parentEl: HTMLDivElement,
+    node: GeneratedMindmapNode,
+    depth: number,
+    path: string
+  ): void {
+    const branchEl = parentEl.createDiv({ cls: "mindmap-ai-generate-preview-branch" });
+    const rowEl = branchEl.createDiv({ cls: "mindmap-ai-generate-preview-row" });
+    rowEl.style.setProperty("--mindmap-preview-depth", String(depth));
+    const checkbox = rowEl.createEl("input", {
+      cls: "mindmap-ai-generate-preview-checkbox",
+      type: "checkbox"
+    });
+    checkbox.checked = true;
+    checkbox.title = "是否生成这个节点及其下级节点";
+    const input = rowEl.createEl("input", {
+      cls: "mindmap-ai-generate-preview-input",
+      type: "text",
+      value: node.title,
+      attr: { "aria-label": `预览节点 ${path}` }
+    });
+    checkbox.addEventListener("change", () => {
+      if (!checkbox.checked) {
+        this.previewItems
+          .filter((item) => item.node === node || this.isDescendantOf(item.node, node))
+          .forEach((item) => { item.checkbox.checked = false; });
+      } else {
+        const item = this.previewItems.find((candidate) => candidate.node === node);
+        if (item) {
+          this.checkAncestors(item);
+        }
+      }
+      this.updateConfirmButtonState();
+    });
+    input.addEventListener("input", () => {
+      node.title = input.value;
+      this.updateConfirmButtonState();
+    });
+    this.previewItems.push({ checkbox, input, node });
+
+    if (node.children.length > 0) {
+      const childrenEl = branchEl.createDiv({ cls: "mindmap-ai-generate-preview-children" });
+      node.children.forEach((child, index) => this.renderPreviewNode(childrenEl, child, depth + 1, `${path}.${index + 1}`));
+    }
+  }
+
+  private isDescendantOf(node: GeneratedMindmapNode, ancestor: GeneratedMindmapNode): boolean {
+    return ancestor.children.some((child) => child === node || this.isDescendantOf(child, ancestor));
+  }
+
+  private checkAncestors(item: { node: GeneratedMindmapNode }): void {
+    const visit = (node: GeneratedMindmapNode): boolean => {
+      if (node === item.node) {
+        return true;
+      }
+      if (node.children.some(visit)) {
+        const parentItem = this.previewItems.find((candidate) => candidate.node === node);
+        if (parentItem) {
+          parentItem.checkbox.checked = true;
+        }
+        return true;
+      }
+      return false;
+    };
+    this.previewItems
+      .filter((candidate) => !this.isNestedNode(candidate.node))
+      .forEach((candidate) => { visit(candidate.node); });
+  }
+
+  private isNestedNode(node: GeneratedMindmapNode): boolean {
+    return this.previewItems.some((item) => item.node !== node && item.node.children.includes(node));
   }
 
   private setAllPreviewItemsChecked(checked: boolean): void {
@@ -324,27 +505,97 @@ class MindmapAiGenerateModal extends Modal {
     this.updateConfirmButtonState();
   }
 
-  private getSelectedTitles(): string[] {
-    const seenTitles = new Set<string>();
-    const selectedTitles: string[] = [];
-    for (const item of this.previewItems) {
-      const title = item.input.value.trim();
+  private getSelectedNodes(): GeneratedMindmapNode[] {
+    const selectedNodes: GeneratedMindmapNode[] = [];
+    const selectedTitles = new Set<string>();
+    const collect = (node: GeneratedMindmapNode): GeneratedMindmapNode | null => {
+      const item = this.previewItems.find((candidate) => candidate.node === node);
+      const title = item?.input.value.trim() ?? node.title.trim();
       const normalizedTitle = title.toLowerCase();
-      if (item.checkbox.checked && title.length > 0 && !seenTitles.has(normalizedTitle)) {
-        selectedTitles.push(title);
-        seenTitles.add(normalizedTitle);
+      if (!item?.checkbox.checked || title.length === 0 || selectedTitles.has(normalizedTitle)) {
+        return null;
       }
-    }
-    return selectedTitles;
+      selectedTitles.add(normalizedTitle);
+      return {
+        title,
+        children: node.children.map(collect).filter((child): child is GeneratedMindmapNode => child !== null)
+      };
+    };
+    this.previewItems
+      .filter((item) => !this.isNestedNode(item.node))
+      .forEach((item) => {
+        const selected = collect(item.node);
+        if (selected) {
+          selectedNodes.push(selected);
+        }
+      });
+    return selectedNodes;
   }
 
   private updateConfirmButtonState(): void {
     if (!this.confirmBtn) {
       return;
     }
-    this.confirmBtn.disabled = this.getSelectedTitles().length === 0;
+    this.confirmBtn.disabled = this.getSelectedNodes().length === 0;
+  }
+
+
+
+  private enableDragging(handle: HTMLElement): void {
+    const modalEl = this.modalEl;
+    handle.addClass("mindmap-ai-generate-drag-handle");
+    handle.setAttribute("title", "拖动移动弹框");
+    let dragState: { pointerX: number; pointerY: number; left: number; top: number } | null = null;
+
+    handle.addEventListener("pointerdown", (event: PointerEvent) => {
+      if (event.button !== 0 || (event.target instanceof HTMLElement && event.target.closest("button"))) {
+        return;
+      }
+      const rect = modalEl.getBoundingClientRect();
+      modalEl.style.position = "fixed";
+      modalEl.style.margin = "0";
+      modalEl.style.left = `${rect.left}px`;
+      modalEl.style.top = `${rect.top}px`;
+      modalEl.style.transform = "none";
+      dragState = { pointerX: event.clientX, pointerY: event.clientY, left: rect.left, top: rect.top };
+      handle.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    handle.addEventListener("pointermove", (event: PointerEvent) => {
+      if (!dragState) {
+        return;
+      }
+      const maxLeft = Math.max(0, window.innerWidth - modalEl.offsetWidth);
+      const maxTop = Math.max(0, window.innerHeight - handle.offsetHeight);
+      const left = Math.min(maxLeft, Math.max(0, dragState.left + event.clientX - dragState.pointerX));
+      const top = Math.min(maxTop, Math.max(0, dragState.top + event.clientY - dragState.pointerY));
+      modalEl.style.left = `${left}px`;
+      modalEl.style.top = `${top}px`;
+    });
+
+    const finishDragging = (): void => { dragState = null; };
+    handle.addEventListener("pointerup", finishDragging);
+    handle.addEventListener("pointercancel", finishDragging);
+  }
+
+  onClose(): void {
+    if (this.backdropPointerHandler) {
+      document.removeEventListener("pointerdown", this.backdropPointerHandler, true);
+      document.removeEventListener("mousedown", this.backdropPointerHandler, true);
+      document.removeEventListener("click", this.backdropPointerHandler, true);
+      this.backdropPointerHandler = null;
+    }
+    if (document.fullscreenElement && this.previewCanvasEl?.contains(document.fullscreenElement)) {
+      void document.exitFullscreen();
+    }
+    if (this.previewFullscreenHandler) {
+      document.removeEventListener("fullscreenchange", this.previewFullscreenHandler);
+      this.previewFullscreenHandler = null;
+    }
   }
 }
+
 
 // Mobile-only custom modal for comments - completely independent from Modal base class
 class CommentModal {
@@ -7683,14 +7934,14 @@ export class MindmapView extends ItemView {
       this.app,
       node.title,
       (userPrompt) => this.generateAiChildNodePreview(nodeId, userPrompt),
-      (titles) => {
-        void this.confirmAiGeneratedChildNodes(nodeId, titles);
+      (nodes) => {
+        void this.confirmAiGeneratedChildNodes(nodeId, nodes);
       }
     );
     modal.open();
   }
 
-  private async generateAiChildNodePreview(nodeId: string, userPrompt: string): Promise<string[]> {
+  private async generateAiChildNodePreview(nodeId: string, userPrompt: string): Promise<GeneratedMindmapNode[]> {
     if (!this.doc) {
       return [];
     }
@@ -7712,7 +7963,7 @@ export class MindmapView extends ItemView {
     this.setAiGeneratingNode(nodeId);
 
     try {
-      const titles = await generateChildNodeTitles(settings, {
+      const generatedNodes = await generateChildNodeTitles(settings, {
         parentTitle: node.title,
         parentNote: node.note,
         existingChildren: node.children.map((child) => child.title),
@@ -7724,20 +7975,23 @@ export class MindmapView extends ItemView {
 
       const existingTitles = new Set(node.children.map((child) => child.title.trim().toLowerCase()));
       const seenTitles = new Set<string>();
-      const filteredTitles: string[] = [];
-      for (const title of titles) {
-        const trimmedTitle = title.trim();
-        const normalizedTitle = trimmedTitle.toLowerCase();
-        if (trimmedTitle.length > 0 && !existingTitles.has(normalizedTitle) && !seenTitles.has(normalizedTitle)) {
-          filteredTitles.push(trimmedTitle);
+      const filterNodes = (nodes: GeneratedMindmapNode[]): GeneratedMindmapNode[] => nodes
+        .map((generatedNode) => {
+          const title = generatedNode.title.trim();
+          const normalizedTitle = title.toLowerCase();
+          if (!title || existingTitles.has(normalizedTitle) || seenTitles.has(normalizedTitle)) {
+            return null;
+          }
           seenTitles.add(normalizedTitle);
-        }
-      }
+          return { title, children: filterNodes(generatedNode.children) };
+        })
+        .filter((generatedNode): generatedNode is GeneratedMindmapNode => generatedNode !== null);
+      const filteredNodes = filterNodes(generatedNodes);
 
-      if (filteredTitles.length === 0) {
+      if (filteredNodes.length === 0) {
         new Notice("未生成可用的新子节点");
       }
-      return filteredTitles;
+      return filteredNodes;
     } catch (error) {
       new Notice(`生成子节点失败：${String(error)}`);
       return [];
@@ -7746,7 +8000,7 @@ export class MindmapView extends ItemView {
     }
   }
 
-  private async confirmAiGeneratedChildNodes(nodeId: string, titles: string[]): Promise<void> {
+  private async confirmAiGeneratedChildNodes(nodeId: string, nodes: GeneratedMindmapNode[]): Promise<void> {
     if (!this.doc) {
       return;
     }
@@ -7758,17 +8012,20 @@ export class MindmapView extends ItemView {
 
     const existingTitles = new Set(node.children.map((child) => child.title.trim().toLowerCase()));
     const seenTitles = new Set<string>();
-    const filteredTitles: string[] = [];
-    for (const title of titles) {
-      const trimmedTitle = title.trim();
-      const normalizedTitle = trimmedTitle.toLowerCase();
-      if (trimmedTitle.length > 0 && !existingTitles.has(normalizedTitle) && !seenTitles.has(normalizedTitle)) {
-        filteredTitles.push(trimmedTitle);
+    const filterNodes = (items: GeneratedMindmapNode[]): GeneratedMindmapNode[] => items
+      .map((item) => {
+        const title = item.title.trim();
+        const normalizedTitle = title.toLowerCase();
+        if (!title || existingTitles.has(normalizedTitle) || seenTitles.has(normalizedTitle)) {
+          return null;
+        }
         seenTitles.add(normalizedTitle);
-      }
-    }
+        return { title, children: filterNodes(item.children) };
+      })
+      .filter((item): item is GeneratedMindmapNode => item !== null);
+    const filteredNodes = filterNodes(nodes);
 
-    if (filteredTitles.length === 0) {
+    if (filteredNodes.length === 0) {
       new Notice("没有可生成的新子节点");
       return;
     }
@@ -7777,12 +8034,43 @@ export class MindmapView extends ItemView {
     this.aiAppearingNodes.clear();
     this.stopAiAppearAnimationFrame();
     this.setAiGeneratingNode(nodeId);
+    this.closeDrawer();
+    this.captureHistorySnapshot();
     try {
-      await this.createChildNodesFromTitlesAnimated(nodeId, filteredTitles);
-      new Notice(`已生成 ${filteredTitles.length} 个子节点`);
+      const createdCount = await this.createGeneratedNodesRecursive(nodeId, filteredNodes);
+      this.normalizeLayoutKeepingNodePosition(nodeId);
+      this.setSingleSelectedNode(nodeId);
+      this.requestSave();
+      this.renderMindmap();
+      new Notice(`已生成 ${createdCount} 个节点`);
     } finally {
       this.setAiGeneratingNode(null);
     }
+  }
+
+  private async createGeneratedNodesRecursive(parentId: string, nodes: GeneratedMindmapNode[]): Promise<number> {
+    if (!this.doc) {
+      return 0;
+    }
+    const parent = findNodeById(this.doc, parentId);
+    if (!parent) {
+      return 0;
+    }
+
+    let createdCount = 0;
+    for (const generatedNode of nodes) {
+      const child = addChildNode(this.doc, parentId, {
+        x: parent.x + 180,
+        y: parent.y + (parent.children.length + 1) * 56
+      });
+      if (!child) {
+        continue;
+      }
+      child.title = generatedNode.title;
+      createdCount += 1;
+      createdCount += await this.createGeneratedNodesRecursive(child.id, generatedNode.children);
+    }
+    return createdCount;
   }
 
   private async executeAiGenerateChildNodes(nodeId: string, userPrompt: string): Promise<void> {
@@ -7810,7 +8098,7 @@ export class MindmapView extends ItemView {
     this.setAiGeneratingNode(nodeId);
 
     try {
-      const titles = await generateChildNodeTitles(settings, {
+      const generatedNodes = await generateChildNodeTitles(settings, {
         parentTitle: node.title,
         parentNote: node.note,
         existingChildren: node.children.map((child) => child.title),
@@ -7819,6 +8107,14 @@ export class MindmapView extends ItemView {
         minCount,
         maxCount
       });
+      const titles: string[] = [];
+      const appendTitles = (items: GeneratedMindmapNode[]): void => {
+        items.forEach((item) => {
+          titles.push(item.title);
+          appendTitles(item.children);
+        });
+      };
+      appendTitles(generatedNodes);
 
       const filteredTitles = titles.filter((title) => {
         const normalized = title.trim().toLowerCase();

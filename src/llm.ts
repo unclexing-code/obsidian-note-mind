@@ -12,6 +12,11 @@ export interface GenerateChildNodesContext {
   maxCount: number;
 }
 
+export interface GeneratedMindmapNode {
+  title: string;
+  children: GeneratedMindmapNode[];
+}
+
 const MAX_NOTE_LENGTH = 300;
 
 export const serializeMindmapContext = (
@@ -135,12 +140,13 @@ const buildPrompt = (context: GenerateChildNodesContext): string => {
     "1. 标题简洁，每个不超过 20 个汉字或 40 个英文字符",
     "2. 结合导图整体语境与用户要求，与目标父节点主题相关",
     "3. 彼此不重复，且不与目标父节点已有子节点重复",
-    "4. 只返回 JSON 数组，例如：[\"子主题1\", \"子主题2\"]",
-    "5. 不要输出任何解释、代码块标记或其他文字"
+    "4. 只返回 JSON 数组，数组元素格式为 {\"title\":\"子主题\",\"children\":[{\"title\":\"孙主题\",\"children\":[]}]}",
+    "5. 可以根据用户要求生成多层子主题；如果没有下级主题，children 返回空数组",
+    "6. 不要输出任何解释、代码块标记或其他文字"
   ].filter(Boolean).join("\n");
 };
 
-const extractJsonArray = (content: string): string[] => {
+const extractJsonArray = (content: string): GeneratedMindmapNode[] => {
   const trimmed = content.trim();
   const fencedMatch = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
   const candidate = fencedMatch?.[1]?.trim() ?? trimmed;
@@ -156,21 +162,33 @@ const extractJsonArray = (content: string): string[] => {
     throw new Error("模型返回格式无效，期望 JSON 数组");
   }
 
-  const titles = parsed
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter((title) => title.length > 0);
+  const normalizeNodes = (items: unknown[]): GeneratedMindmapNode[] => items
+    .map((item) => {
+      if (typeof item === "string") {
+        return { title: item.trim(), children: [] };
+      }
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const record = item as { title?: unknown; children?: unknown };
+      const title = typeof record.title === "string" ? record.title.trim() : "";
+      return title.length > 0
+        ? { title, children: Array.isArray(record.children) ? normalizeNodes(record.children) : [] }
+        : null;
+    })
+    .filter((node): node is GeneratedMindmapNode => node !== null);
 
-  if (titles.length === 0) {
+  const nodes = normalizeNodes(parsed);
+  if (nodes.length === 0) {
     throw new Error("模型未返回有效的子节点标题");
   }
-
-  return titles;
+  return nodes;
 };
 
 export const generateChildNodeTitles = async (
   settings: MindmapPluginSettings,
   context: GenerateChildNodesContext
-): Promise<string[]> => {
+): Promise<GeneratedMindmapNode[]> => {
   const endpoint = getEndpoint(settings);
   if (llmProviderRequiresApiKey(settings.llmProvider) && !endpoint.apiKey) {
     throw new Error("请先在插件设置中填写 API Key");
@@ -219,9 +237,17 @@ export const generateChildNodeTitles = async (
     throw new Error("模型返回内容为空");
   }
 
-  const titles = extractJsonArray(content);
-  const uniqueTitles = Array.from(new Set(titles));
-  return uniqueTitles.slice(0, maxCount);
+  const nodes = extractJsonArray(content);
+  const seenTitles = new Set<string>();
+  const uniqueNodes = nodes.filter((node) => {
+    const normalized = node.title.toLowerCase();
+    if (seenTitles.has(normalized)) {
+      return false;
+    }
+    seenTitles.add(normalized);
+    return true;
+  });
+  return uniqueNodes.slice(0, maxCount);
 };
 
 export const getProviderLabel = (provider: LlmProvider): string => {
