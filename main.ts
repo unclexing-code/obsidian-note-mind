@@ -4,6 +4,7 @@ import { MindmapSettingTab } from "./src/settings-tab";
 import { normalizeMindmapDocument, walkNodes } from "./src/store";
 import { createDefaultMindmap, type MindmapDocument, type MindmapNode } from "./src/types";
 import { MINDMAP_VIEW_TYPE, MindmapView } from "./src/view";
+import { InboxStore, INBOX_PATH } from "./src/inbox";
 
 const PRIMARY_MINDMAP_EXTENSION = "mindmap";
 const LEGACY_MINDMAP_EXTENSION = "mindmap.json";
@@ -158,6 +159,7 @@ class MindmapGlobalSearchModal extends Modal {
 
 export default class MindmapPlugin extends Plugin {
   settings: MindmapPluginSettings = { ...DEFAULT_SETTINGS };
+  inbox!: InboxStore;
   private readonly preferredLeafIds = new Map<string, string>();
   private readonly dedupeTimers = new Set<number>();
   private isApplyingDedupe = false;
@@ -187,8 +189,26 @@ export default class MindmapPlugin extends Plugin {
     return result;
   }
 
+  private async syncInbox(): Promise<void> {
+    try { await this.inbox.sync(this.settings.inboxServerUrl, this.settings.inboxAccessToken); }
+    catch (error) { console.warn("收集箱同步失败，可在设置中重试", error); }
+  }
+
   async onload(): Promise<void> {
     await this.loadSettings();
+    this.inbox = new InboxStore(this.app);
+    this.app.workspace.onLayoutReady(() => {
+      void this.inbox.initialize().then(() => this.syncInbox()).catch((error) => new Notice(`收集箱初始化失败：${error}`));
+    });
+    this.registerInterval(window.setInterval(() => { void this.syncInbox(); }, 60000));
+    const inboxFileChanged = (file: { path: string }): void => {
+      if (file.path === INBOX_PATH) {
+        void this.inbox.refresh().catch((error) => new Notice(`收集箱读取失败：${error}`));
+      }
+    };
+    this.registerEvent(this.app.vault.on("modify", inboxFileChanged));
+    this.registerEvent(this.app.vault.on("create", inboxFileChanged));
+    this.registerEvent(this.app.vault.on("delete", inboxFileChanged));
     this.addSettingTab(new MindmapSettingTab(this.app, this));
     this.registerView(MINDMAP_VIEW_TYPE, (leaf) => new MindmapView(leaf));
     this.registerExtensions([PRIMARY_MINDMAP_EXTENSION, LEGACY_MINDMAP_EXTENSION], MINDMAP_VIEW_TYPE);
@@ -297,6 +317,22 @@ export default class MindmapPlugin extends Plugin {
       hotkeys: [{ modifiers: ["Mod"], key: "f" }],
       callback: () => {
         this.openGlobalSearchModal();
+      }
+    });
+
+    this.addCommand({
+      id: "add-inbox-item",
+      name: "新增收集节点（全局收集箱）",
+      hotkeys: [{ modifiers: ["Mod"], key: "d" }],
+      checkCallback: (checking) => {
+        const activeView = this.app.workspace.getActiveViewOfType(MindmapView);
+        if (!activeView) {
+          return false;
+        }
+        if (!checking) {
+          void activeView.openInboxDrawer();
+        }
+        return true;
       }
     });
   }

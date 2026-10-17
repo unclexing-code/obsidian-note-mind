@@ -2338,6 +2338,190 @@
    margin-right: 320px;
  }
 
+ .mindmap-inbox {
+   position: absolute;
+   top: 52px;
+   left: 16px;
+   z-index: 35;
+   max-width: calc(100% - 24px);
+ }
+
+ .mindmap-inbox-toggle {
+   float: left;
+ }
+
+ .mindmap-inbox-panel {
+   clear: both;
+   width: 340px;
+   max-width: 100%;
+   margin-top: 42px;
+   padding: 14px;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 12px;
+   background: var(--background-primary);
+   box-shadow: 0 8px 28px rgba(0, 0, 0, .18);
+ }
+
+ .mindmap-inbox-panel[hidden] {
+   display: none;
+ }
+
+ .mindmap-inbox-header,
+ .mindmap-inbox-actions {
+   display: flex;
+   align-items: center;
+   gap: 6px;
+   flex-wrap: wrap;
+   margin-bottom: 10px;
+ }
+
+ .mindmap-inbox-header {
+   justify-content: space-between;
+ }
+
+ .mindmap-inbox-list {
+   max-height: 55vh;
+   overflow: auto;
+   margin-top: 12px;
+ }
+
+ .mindmap-inbox-card {
+   display: flex;
+   align-items: center;
+   gap: 10px;
+   padding: 10px 12px;
+   margin-bottom: 8px;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 10px;
+   background: var(--background-secondary);
+   cursor: grab;
+ }
+ .mindmap-inbox-card-title {
+   flex: 1 1 auto;
+   min-width: 0;
+   overflow-wrap: anywhere;
+   cursor: pointer;
+   font-weight: 600;
+ }
+ .mindmap-inbox-card-title:hover { color: var(--interactive-accent); }
+ .mindmap-inbox-actions { margin: 0; flex: 0 0 auto; }
+ .mindmap-node-group.is-inbox-drop-target .mindmap-node { filter: drop-shadow(0 0 8px var(--interactive-accent)); }
+ .mindmap-drawer.is-inbox-drawer .mindmap-drawer-header-meta h3[contenteditable="true"] {
+   min-width: 80px;
+   padding: 3px 6px;
+   border-radius: 5px;
+   outline: 1px solid var(--background-modifier-border);
+   cursor: text;
+ }
+ .mindmap-drawer.is-inbox-drawer .mindmap-drawer-header-meta h3[contenteditable="true"]:focus {
+   outline-color: var(--interactive-accent);
+ }
+ .mindmap-drawer.is-inbox-drawer .mindmap-drawer-header-path {
+   display: none;
+ }
+ .mindmap-inbox-drawer-save { min-width: 52px; }
+ .mindmap-inbox-actions button {
+   font-size: var(--font-ui-smaller);
+ }
+
+ .mindmap-inbox-empty {
+   padding: 16px;
+   color: var(--text-muted);
+ }
+
+ .mindmap-inbox-editor-modal-container .modal-content {
+   padding: 0;
+ }
+
+ .mindmap-inbox-editor-modal {
+   display: flex;
+   flex-direction: column;
+   gap: 12px;
+   width: min(520px, calc(100vw - 28px));
+   max-height: calc(100vh - 28px);
+   padding: 18px;
+ }
+
+ .mindmap-inbox-editor-scroll {
+   display: flex;
+   flex-direction: column;
+   gap: 12px;
+   overflow: auto;
+   flex: 1 1 auto;
+   min-height: 0;
+ }
+
+ .mindmap-inbox-editor-footer {
+   display: flex;
+   justify-content: flex-end;
+   gap: 8px;
+   flex: 0 0 auto;
+   padding-top: 4px;
+ }
+
+ .mindmap-inbox-editor-header {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 12px;
+ }
+
+ .mindmap-inbox-editor-header h2 {
+   margin: 0;
+ }
+
+ .mindmap-inbox-editor-close {
+   flex: 0 0 auto;
+ }
+
+ .mindmap-inbox-editor-modal input,
+ .mindmap-inbox-editor-modal textarea {
+   box-sizing: border-box;
+   width: 100%;
+   font-size: var(--font-ui-medium);
+ }
+
+ .mindmap-inbox-editor-modal textarea {
+   min-height: 180px;
+   resize: vertical;
+ }
+
+ .mindmap-inbox-editor-modal button {
+   min-height: 36px;
+ }
+
+ .mindmap-inbox-editor-title {
+   flex: 0 0 auto;
+   padding: 8px 10px;
+ }
+
+ .mindmap-inbox-live-editor {
+   min-height: 240px;
+ }
+
+ .mindmap-inbox-live-editor .cm-editor {
+   box-sizing: border-box;
+   width: 100%;
+   min-height: 240px;
+   max-height: 50vh;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 8px;
+   background: var(--background-primary);
+   font-size: var(--font-text-size);
+ }
+
+ .mindmap-inbox-live-editor .cm-editor.cm-focused {
+   border-color: var(--interactive-accent);
+   outline: none;
+ }
+
+ .mindmap-inbox-live-editor .cm-scroller {
+   overflow: auto;
+   font-family: var(--font-text);
+   line-height: var(--line-height-normal);
+   padding: 10px 12px;
+ }
+
  /* AI Generate Child Nodes Modal */
  .mindmap-ai-generate-drag-handle {
    cursor: move;
@@ -3106,4 +3290,8 @@
    overflow: hidden;
    text-overflow: ellipsis;
    white-space: nowrap;
+ }
+
+ .mindmap-note-preview pre code {
+   text-wrap: wrap;
  }

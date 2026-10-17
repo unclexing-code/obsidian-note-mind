@@ -5,6 +5,8 @@ import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { markdown } from "@codemirror/lang-markdown";
 import { searchKeymap } from "@codemirror/search";
 import { App, ItemView, MarkdownRenderer, Menu, Modal, Notice, Platform, TFile, TFolder, normalizePath, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { mountInboxPanel, INBOX_DRAG_TYPE } from "./inbox-panel";
+import { type InboxItem } from "./inbox";
 import { generateChildNodeTitles, serializeMindmapContext, type GeneratedMindmapNode } from "./llm";
 import { addChildNode, findNodeById, findParentOfNode, normalizeMindmapDocument, removeNode, reorderNodeWithinParent, reparentNode, visibleNodes, walkNodes } from "./store";
 import { getMindmapPlugin, llmProviderRequiresApiKey } from "./settings";
@@ -985,6 +987,9 @@ export class MindmapView extends ItemView {
   private noteCommentsPanelEl!: HTMLDivElement;
   private editingCommentId: string | null = null;
   private noteEditorView: EditorView | null = null;
+  private inboxSaveButtonEl!: HTMLButtonElement;
+  private inboxDrawerItem: InboxItem | null = null;
+  private inboxDraft = false;
   private isSyncingNoteEditor = false;
   private noteRenderTimer: number | null = null;
 
@@ -1656,6 +1661,10 @@ export class MindmapView extends ItemView {
   }
 
   private async applyHistoryState(nextDoc: MindmapDocument): Promise<void> {
+    const previousSources = new Set<string>();
+    if (this.doc) walkNodes(this.doc.root, (node) => { if (node.inboxSourceId) previousSources.add(node.inboxSourceId); });
+    const nextSources = new Set<string>();
+    walkNodes(nextDoc.root, (node) => { if (node.inboxSourceId) nextSources.add(node.inboxSourceId); });
     this.doc = normalizeMindmapDocument(this.cloneDocument(nextDoc));
     this.normalizeLayout();
     this.refreshTabTitle();
@@ -1663,7 +1672,16 @@ export class MindmapView extends ItemView {
     this.noteHistoryCapturedForSession = false;
     this.linkHistoryCapturedForSession = false;
     await this.syncOpenDrawerWithSelection();
-    this.requestSave();
+    await this.flushSave();
+    const inbox = getMindmapPlugin(this.app as ObsidianAppWithPlugins)?.inbox;
+    if (inbox) {
+      for (const id of previousSources) {
+        if (!nextSources.has(id)) await inbox.setStatus(id, "pending");
+      }
+      for (const id of nextSources) {
+        if (!previousSources.has(id)) await inbox.setStatus(id, "imported", this.file?.path);
+      }
+    }
     this.renderMindmap();
     this.updateMobileActionButtons();
   }
@@ -1867,7 +1885,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
+        ".mindmap-canvas, .mindmap-inbox, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
       )
     ) {
       return;
@@ -1884,7 +1902,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
+        ".mindmap-canvas, .mindmap-inbox, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
       )
     ) {
       return;
@@ -1901,7 +1919,7 @@ export class MindmapView extends ItemView {
     if (
       target instanceof Element &&
       target.closest(
-        ".mindmap-canvas, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
+        ".mindmap-canvas, .mindmap-inbox, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container"
       )
     ) {
       return;
@@ -1982,7 +2000,7 @@ export class MindmapView extends ItemView {
       this.onTouchStart(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
+    if (target instanceof Element && target.closest(".mindmap-inbox, .mindmap-inbox-editor-modal-container, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
       return;
     }
     event.stopPropagation();
@@ -2016,7 +2034,7 @@ export class MindmapView extends ItemView {
       this.onTouchMove(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
+    if (target instanceof Element && target.closest(".mindmap-inbox, .mindmap-inbox-editor-modal-container, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
       return;
     }
     event.stopPropagation();
@@ -2050,7 +2068,7 @@ export class MindmapView extends ItemView {
       this.onTouchEnd(event, true);
       return;
     }
-    if (target instanceof Element && target.closest(".mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
+    if (target instanceof Element && target.closest(".mindmap-inbox, .mindmap-inbox-editor-modal-container, .mindmap-mobile-action-cluster, .mindmap-mobile-global-action-cluster, .mindmap-mobile-node-tooltip, .mindmap-drawer, .mindmap-note-preview, .mindmap-note-input, .mindmap-node-title-input, .mindmap-node-link-input, .mindmap-image-lightbox, .mindmap-global-search-modal, .mindmap-global-search-modal-container")) {
       return;
     }
     event.stopPropagation();
@@ -2656,6 +2674,40 @@ export class MindmapView extends ItemView {
     this.layoutEl = this.containerEl.createDiv({ cls: "mindmap-layout" });
     this.updateDrawerWidth();
     this.canvasEl = this.layoutEl.createDiv({ cls: "mindmap-canvas" });
+    const inbox = getMindmapPlugin(this.app as ObsidianAppWithPlugins)?.inbox;
+    if (inbox) {
+      this.register(mountInboxPanel(this.app, this.containerEl, inbox, (id) => this.importInboxItem(id), (item) => { void this.openInboxDrawer(item); }, () => { void this.openInboxDrawer(); }));
+      const clearInboxDropTarget = (): void => {
+        this.canvasEl.querySelectorAll(".is-inbox-drop-target").forEach((el) => {
+          el.classList.remove("is-inbox-drop-target");
+          el.querySelector(".mindmap-node")?.classList.remove("is-drop-target");
+        });
+      };
+      this.canvasEl.addEventListener("dragover", (event) => {
+        if (event.dataTransfer?.types.includes(INBOX_DRAG_TYPE)) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          const target = event.target instanceof Element ? event.target.closest(".mindmap-node-group") : null;
+          clearInboxDropTarget();
+          target?.classList.add("is-inbox-drop-target");
+          target?.querySelector(".mindmap-node")?.classList.add("is-drop-target");
+        }
+      });
+      this.canvasEl.addEventListener("dragleave", (event) => {
+        if (!(event.relatedTarget instanceof Node) || !this.canvasEl.contains(event.relatedTarget)) clearInboxDropTarget();
+      });
+      this.registerDomEvent(document, "dragend", clearInboxDropTarget);
+      this.canvasEl.addEventListener("drop", (event) => {
+        clearInboxDropTarget();
+        const id = event.dataTransfer?.getData(INBOX_DRAG_TYPE);
+        if (!id || !this.doc) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const element = event.target instanceof Element ? event.target.closest(".mindmap-node-group") : null;
+        const targetId = element?.getAttribute("data-id");
+        void this.importInboxItem(id, targetId ?? this.doc.root.id).catch((error) => new Notice(`导入失败：${error}`));
+      });
+    }
     this.canvasEl.addEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     this.marqueeEl = this.canvasEl.createDiv({ cls: "mindmap-selection-marquee is-hidden" });
     this.desktopActionClusterEl = this.containerEl.createDiv({ cls: "mindmap-desktop-action-cluster" });
@@ -2825,6 +2877,10 @@ export class MindmapView extends ItemView {
     this.drawerHeaderEl = this.drawerEl.createDiv({ cls: "mindmap-drawer-header" });
     const drawerHeaderMetaEl = this.drawerHeaderEl.createDiv({ cls: "mindmap-drawer-header-meta" });
     this.drawerTitleEl = drawerHeaderMetaEl.createEl("h3", { text: "节点笔记" });
+    this.drawerTitleEl.setAttribute("contenteditable", "false");
+    this.drawerTitleEl.addEventListener("input", () => {
+      if (this.inboxDrawerItem) this.inboxDrawerItem.title = this.drawerTitleEl.textContent?.trim() ?? "";
+    });
     const drawerHeaderPathEl = drawerHeaderMetaEl.createDiv({ cls: "mindmap-drawer-header-path" });
     drawerHeaderPathEl.setText(this.file?.path ?? "");
     const drawerHeaderActionsEl = this.drawerHeaderEl.createDiv({ cls: "mindmap-drawer-header-actions" });
@@ -2864,6 +2920,10 @@ export class MindmapView extends ItemView {
     });
 
 
+
+    this.inboxSaveButtonEl = drawerHeaderActionsEl.createEl("button", { cls: "mindmap-inbox-drawer-save mod-cta is-hidden", text: "保存" });
+    this.inboxSaveButtonEl.type = "button";
+    this.inboxSaveButtonEl.addEventListener("click", () => { void this.saveInboxDrawer(); });
 
     this.drawerCloseEl = drawerHeaderActionsEl.createEl("button", {
       cls: "mindmap-drawer-close",
@@ -3020,7 +3080,7 @@ export class MindmapView extends ItemView {
       cls: "mindmap-note-search-input",
       type: "search"
     });
-    this.noteSearchInputEl.placeholder = "搜索当前节点笔记...";
+    this.noteSearchInputEl.placeholder = "🔍~~~搜索当前节点笔记...";
     this.noteSearchInputEl.addEventListener("input", () => this.applyNoteSearchHighlight());
     this.noteSurfaceEl = this.drawerEl.createDiv({ cls: "mindmap-note-surface" });
     this.noteSelectionToolbarEl = this.noteSurfaceEl.createDiv({ cls: "mindmap-note-selection-toolbar is-hidden" });
@@ -3145,6 +3205,10 @@ export class MindmapView extends ItemView {
     this.noteInputEl.addEventListener("pointerup", () => this.updateNoteSelectionToolbar());
     this.noteInputEl.addEventListener("input", () => {
       if (!this.isMobileLayout) {
+        return;
+      }
+      if (this.inboxDrawerItem) {
+        this.handleNoteEditorInput(this.noteInputEl.value);
         return;
       }
       if (!this.doc || !this.selectedNodeId) {
@@ -4871,7 +4935,65 @@ export class MindmapView extends ItemView {
     }
   }
 
+  public async openInboxDrawer(item?: InboxItem): Promise<void> {
+    this.closeDrawer();
+    const now = Date.now();
+    this.inboxDraft = !item;
+    this.inboxDrawerItem = item ? { ...item } : { id: crypto.randomUUID(), title: "", note: "", createdAt: now, updatedAt: now, status: "pending" };
+    this.drawerEl.addClass("is-inbox-drawer");
+    this.inboxSaveButtonEl.removeClass("is-hidden");
+    this.selectedNodeId = null;
+    this.selectedNodeIds.clear();
+    this.nodeLinkInputEl.value = "";
+    this.nodeLinkInputEl.disabled = true;
+    this.nodeLinkAddButtonEl.disabled = true;
+    this.nodeLinkAddButtonEl.toggleClass("is-disabled", true);
+    this.drawerTitleEl.removeClass("is-hidden");
+    this.drawerTitleEl.setAttribute("contenteditable", "true");
+    this.drawerTitleEl.textContent = this.inboxDrawerItem.title;
+    this.drawerTitleEl.setAttribute("role", "textbox");
+    this.setNoteEditorValue(this.inboxDrawerItem.note);
+    this.noteInputEl.value = this.inboxDrawerItem.note;
+    this.renderNoteEditingMediaPreview(this.inboxDrawerItem.note);
+    this.cancelPendingMarkdownRender();
+    await this.renderMarkdown(this.inboxDrawerItem.note);
+    this.drawerEl.removeClass("is-hidden");
+    this.layoutEl.addClass("has-drawer");
+    if (this.isMobileLayout) {
+      document.body.addClass("mindmap-mobile-note-lock");
+      document.documentElement.addClass("mindmap-mobile-note-lock");
+    }
+    this.setNoteEditing(!item);
+    if (!item) window.setTimeout(() => {
+      if (this.inboxDrawerItem && this.inboxDraft) this.drawerTitleEl.focus();
+    }, 0);
+  }
+
+  private async saveInboxDrawer(): Promise<void> {
+    const item = this.inboxDrawerItem;
+    const store = getMindmapPlugin(this.app as ObsidianAppWithPlugins)?.inbox;
+    if (!item || !store) return;
+    const title = this.drawerTitleEl.textContent?.trim() ?? "";
+    if (!title) { new Notice("请填写节点标题"); return; }
+    this.inboxSaveButtonEl.disabled = true;
+    try {
+      await store.put({ ...item, title, updatedAt: Date.now() });
+      this.inboxDraft = false;
+      new Notice("收集节点已保存");
+    } catch (error) { new Notice(`保存失败：${error}`); }
+    finally { this.inboxSaveButtonEl.disabled = false; }
+  }
+
   private async syncDrawerToNode(nodeId: string): Promise<void> {
+    if (this.inboxDrawerItem) {
+      this.inboxDrawerItem = null;
+      this.inboxDraft = false;
+      this.drawerEl.removeClass("is-inbox-drawer");
+      this.drawerTitleEl.setAttribute("contenteditable", "false");
+      this.drawerTitleEl.removeAttribute("role");
+      this.inboxSaveButtonEl.addClass("is-hidden");
+      this.drawerTitleEl.removeClass("is-hidden");
+    }
     if (!this.doc) {
       return;
     }
@@ -4882,6 +5004,9 @@ export class MindmapView extends ItemView {
     this.selectedNodeId = node.id;
     this.selectedNodeIds = new Set([node.id]);
     this.drawerTitleEl.setText(`${node.title}`);
+    this.drawerTitleEl.setAttribute("contenteditable", "false");
+    this.inboxSaveButtonEl.addClass("is-hidden");
+    this.drawerTitleEl.removeClass("is-hidden");
     const drawerHeaderPathEl = this.drawerHeaderEl.querySelector<HTMLElement>(".mindmap-drawer-header-path");
     drawerHeaderPathEl?.setText(this.doc?.selfPath ?? this.file?.path ?? "");
     // this.nodeTitleInputEl.value = node.title;
@@ -6704,6 +6829,13 @@ export class MindmapView extends ItemView {
   }
 
   private handleNoteEditorInput(markdown: string): void {
+    if (this.inboxDrawerItem) {
+      this.inboxDrawerItem.note = markdown;
+      this.noteInputEl.value = markdown;
+      this.renderNoteEditingMediaPreview(markdown);
+      this.scheduleMarkdownRender(markdown);
+      return;
+    }
     if (!this.doc || !this.selectedNodeId) {
       return;
     }
@@ -7597,6 +7729,35 @@ export class MindmapView extends ItemView {
     noiseSource.stop(now + 0.05);
 
     master.gain.exponentialRampToValueAtTime(0.0001, now + (kind === "add" ? 0.14 : 0.16));
+  }
+
+  private async importInboxItem(id: string, parentId?: string): Promise<void> {
+    const store = getMindmapPlugin(this.app as ObsidianAppWithPlugins)?.inbox;
+    if (!store || !this.doc || !this.file || !store.claim(id)) return;
+    try {
+      const item = store.get(id);
+      if (!item || item.status !== "pending") return;
+      let exists = false;
+      walkNodes(this.doc.root, (node) => { if (node.inboxSourceId === id) exists = true; });
+      if (!exists) {
+        const before = this.cloneDocument(this.doc);
+        this.captureHistorySnapshot();
+        const parent = parentId ?? this.selectedNodeId ?? this.doc.root.id;
+        const child = addChildNode(this.doc, parent);
+        if (!child) throw new Error("目标节点不存在");
+        child.title = item.title;
+        child.note = item.note;
+        child.inboxSourceId = item.id;
+        this.normalizeLayoutKeepingNodePosition(parent);
+        try { await this.flushSave(); }
+        catch (error) { this.doc = before; this.renderMindmap(); throw error; }
+        this.setSingleSelectedNode(child.id);
+        this.renderMindmap();
+      } else {
+        await this.flushSave();
+      }
+      await store.setStatus(id, "imported", this.file.path);
+    } finally { store.release(id); }
   }
 
   private requestSave(): void {
@@ -9291,6 +9452,13 @@ export class MindmapView extends ItemView {
   }
 
   private closeDrawer(): void {
+    this.inboxDrawerItem = null;
+    this.inboxDraft = false;
+    this.drawerEl.removeClass("is-inbox-drawer");
+    this.drawerTitleEl?.removeClass("is-hidden");
+    this.drawerTitleEl.setAttribute("contenteditable", "false");
+    this.drawerTitleEl.removeAttribute("role");
+    this.inboxSaveButtonEl?.addClass("is-hidden");
     this.drawerEl.addClass("is-hidden");
     this.layoutEl.removeClass("has-drawer");
     if (this.isMobileLayout) {

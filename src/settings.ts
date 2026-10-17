@@ -1,3 +1,5 @@
+import type { InboxStore } from "./inbox";
+
 export type LlmProvider = "deepseek" | "openai" | "ollama" | "custom";
 
 export interface MindmapPluginSettings {
@@ -11,6 +13,8 @@ export interface MindmapPluginSettings {
   customModel: string;
   minChildCount: number;
   maxChildCount: number;
+  inboxServerUrl: string;
+  inboxAccessToken: string;
 }
 
 export const DEFAULT_SETTINGS: MindmapPluginSettings = {
@@ -23,7 +27,9 @@ export const DEFAULT_SETTINGS: MindmapPluginSettings = {
   customBaseUrl: "",
   customModel: "",
   minChildCount: 1,
-  maxChildCount: 3
+  maxChildCount: 3,
+  inboxServerUrl: "",
+  inboxAccessToken: ""
 };
 
 export const LLM_PROVIDER_LABELS: Record<LlmProvider, string> = {
@@ -38,6 +44,7 @@ export const llmProviderRequiresApiKey = (provider: LlmProvider): boolean => {
 };
 
 export interface MindmapPluginApi {
+  inbox: InboxStore;
   settings: MindmapPluginSettings;
   saveSettings(): Promise<void>;
   openGlobalSearchModal?(): void;

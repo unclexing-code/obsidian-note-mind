@@ -25,6 +25,7 @@ export interface MindmapNode {
   manualSize?: boolean;
   collapsed?: boolean;
   note?: string;
+  inboxSourceId?: string;
   linkTarget?: string;
   links?: MindmapNodeLink[];
   comments?: MindmapComment[];

@@ -11,6 +11,26 @@ export class MindmapSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
+    containerEl.createEl("h2", { text: "全局收集箱" });
+    new Setting(containerEl).setName("服务器地址").setDesc("可选，填写 HTTPS 地址；留空仅使用本地收集箱。")
+      .addText((text) => text.setValue(this.plugin.settings.inboxServerUrl).onChange(async (value) => {
+        this.plugin.settings.inboxServerUrl = value.trim(); await this.plugin.saveSettings();
+      }));
+    new Setting(containerEl).setName("收集箱访问令牌")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.setValue(this.plugin.settings.inboxAccessToken).onChange(async (value) => {
+          this.plugin.settings.inboxAccessToken = value; await this.plugin.saveSettings();
+        });
+      });
+    new Setting(containerEl).setName("立即同步").setDesc("本地文件：思维导图/全局收集箱.json；配置服务器后每分钟同步。")
+      .addButton((button) => button.setButtonText("同步并测试连接").onClick(async () => {
+        if (!this.plugin.settings.inboxServerUrl) { new Notice("请先填写服务器地址"); return; }
+        try {
+          await this.plugin.inbox.sync(this.plugin.settings.inboxServerUrl, this.plugin.settings.inboxAccessToken);
+          new Notice("收集箱同步成功");
+        } catch (error) { new Notice(`同步失败：${error}`); }
+      }));
 
     containerEl.createEl("h2", { text: "AI 生成子节点" });
 
