@@ -1034,12 +1034,12 @@ export class MindmapView extends ItemView {
     if (event.key.toLowerCase() !== "d" || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) {
       return;
     }
-    if (!this.selectedNodeId && this.selectedNodeIds.size === 0) {
+    if (!this.containerEl.isConnected || this.app.workspace.getActiveViewOfType(MindmapView) !== this) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    void this.toggleDrawerForSelection();
+    void this.openInboxDrawer();
   };
 
 
@@ -2761,10 +2761,12 @@ export class MindmapView extends ItemView {
     this.containerEl.addClass("mindmap-root-view");
     this.containerEl.toggleClass("is-mobile", this.isMobileLayout);
     this.containerEl.tabIndex = 0;
+    window.addEventListener("keydown", this.onDrawerShortcut, true);
     window.addEventListener("keydown", this.onGlobalSearchKeydown, { capture: true });
     window.addEventListener("pointerdown", this.onNewTabIntentPointer, { capture: true });
     window.addEventListener("mousedown", this.onNewTabIntentMouse, { capture: true });
     window.addEventListener("keydown", this.onNewTabIntentKeydown, { capture: true });
+    this.containerEl.addEventListener("keydown", this.onKeydown);
     this.containerEl.addEventListener("keydown", this.onDrawerShortcut, true);
     if (this.isMobileLayout) {
       this.containerEl.addEventListener("touchstart", this.onContainerZenTouchStart, { passive: false, capture: true });
@@ -3421,10 +3423,12 @@ export class MindmapView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    window.removeEventListener("keydown", this.onDrawerShortcut, true);
     window.removeEventListener("keydown", this.onGlobalSearchKeydown, { capture: true });
     window.removeEventListener("pointerdown", this.onNewTabIntentPointer, true);
     window.removeEventListener("mousedown", this.onNewTabIntentMouse, true);
     window.removeEventListener("keydown", this.onNewTabIntentKeydown, true);
+    this.containerEl.removeEventListener("keydown", this.onKeydown);
     this.containerEl.removeEventListener("keydown", this.onDrawerShortcut, true);
     this.canvasEl?.removeEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     if (this.isMobileLayout) {
