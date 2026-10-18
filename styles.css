@@ -1877,7 +1877,22 @@
    padding: 0;
  }
 
- .mindmap-note-editor-host .cm-placeholder {
+.mindmap-note-inline-image {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.mindmap-note-inline-image img {
+  display: block;
+  max-width: min(100%, 420px);
+  max-height: 240px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+
    color: var(--text-faint);
  }
 

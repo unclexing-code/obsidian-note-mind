@@ -1,5 +1,5 @@
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap, placeholder } from "@codemirror/view";
+import { Decoration, type DecorationSet, EditorView, keymap, placeholder, ViewPlugin, WidgetType, type ViewUpdate } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from "@codemirror/commands";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
@@ -59,6 +59,60 @@ declare global {
 }
 
 export const MINDMAP_VIEW_TYPE = "mindmap-view";
+
+class NoteImageWidget extends WidgetType {
+  constructor(private readonly app: App, private readonly path: string, private readonly alt: string) {
+    super();
+  }
+
+  toDOM(): HTMLElement {
+    const wrapper = document.createElement("span");
+    wrapper.className = "mindmap-note-inline-image";
+    const image = document.createElement("img");
+    image.alt = this.alt;
+    image.loading = "lazy";
+    const normalizedPath = normalizePath(this.path.replace(/^\//, ""));
+    const file = this.app.vault.getAbstractFileByPath(normalizedPath);
+    if (file instanceof TFile) {
+      image.src = this.app.vault.getResourcePath(file);
+    }
+    wrapper.appendChild(image);
+    return wrapper;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+const noteInlineImagePlugin = (app: App): ViewPlugin<{ decorations: DecorationSet }> => ViewPlugin.define((view) => ({
+  decorations: buildNoteImageDecorations(view, app),
+  update(update: ViewUpdate): void {
+    if (update.docChanged || update.viewportChanged) {
+      this.decorations = buildNoteImageDecorations(update.view, app);
+    }
+  }
+}), { decorations: (value) => value.decorations });
+
+const buildNoteImageDecorations = (view: EditorView, app: App): DecorationSet => {
+  const ranges = [] as Array<{ from: number; to: number; value: Decoration }>;
+  for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
+    const line = view.state.doc.line(lineNumber);
+    const pattern = /!\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(line.text)) !== null) {
+      const from = line.from + match.index;
+      ranges.push({
+        from,
+        to: from + match[0].length,
+        value: Decoration.replace({ widget: new NoteImageWidget(app, match[1], match[2] ?? match[1]) })
+      });
+    }
+  }
+  return Decoration.set(ranges.map((range) => range.value.range(range.from, range.to)), true);
+};
+
+
 
 class MindmapAssociationModal extends Modal {
   private query = "";
@@ -6794,6 +6848,7 @@ export class MindmapView extends ItemView {
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
           updateListener,
           editorMouseHandlers,
+          noteInlineImagePlugin(this.app),
           EditorView.lineWrapping,
           EditorView.theme({
             "&": { height: "100%" },
