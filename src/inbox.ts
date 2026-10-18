@@ -7,6 +7,7 @@ export interface InboxItem {
   createdAt: number;
   updatedAt: number;
   status: "pending" | "imported" | "deleted";
+  links?: Array<{ id: string; label: string; target: string }>;
   importedPath?: string;
 }
 

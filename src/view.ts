@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, placeholder, ViewPlugin, WidgetType, type ViewUpdate } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from "@codemirror/commands";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -114,6 +114,51 @@ const buildNoteImageDecorations = (view: EditorView, app: App): DecorationSet =>
 
 
 
+const codeBlockPlugin = ViewPlugin.define((view) => ({
+  decorations: buildCodeBlockDecorations(view),
+  update(update: ViewUpdate): void {
+    if (update.docChanged || update.viewportChanged) {
+      this.decorations = buildCodeBlockDecorations(update.view);
+    }
+  }
+}), { decorations: (value) => value.decorations });
+
+const buildCodeBlockDecorations = (view: EditorView): DecorationSet => {
+  const ranges: Range<Decoration>[] = [];
+  let inBlock = false;
+  let language = "text";
+  for (let lineNumber = 1; lineNumber <= view.state.doc.lines; lineNumber += 1) {
+    const line = view.state.doc.line(lineNumber);
+    const text = line.text;
+    const fence = /^\s*```(.*)$/.exec(text);
+    if (fence) {
+      if (!inBlock) {
+        inBlock = true;
+        language = fence[1].trim() || "text";
+        ranges.push(Decoration.line({ class: `mindmap-code-block-fence mindmap-code-language-${language.replace(/[^a-z0-9_-]/gi, "")}` }).range(line.from));
+      } else {
+        ranges.push(Decoration.line({ class: "mindmap-code-block-fence mindmap-code-block-end" }).range(line.from));
+        inBlock = false;
+      }
+      continue;
+    }
+    if (!inBlock) continue;
+    ranges.push(Decoration.line({ class: "mindmap-code-block-line" }).range(line.from));
+    const tokenPatterns = [
+      { pattern: /\/\/.*$|#.*$/g, className: "mindmap-code-comment" },
+      { pattern: /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g, className: "mindmap-code-string" },
+      { pattern: /\b(const|let|var|function|return|if|else|for|while|import|from|export|class|new|async|await|def|print|SELECT|FROM|WHERE)\b/g, className: "mindmap-code-keyword" },
+      { pattern: /\b\d+(?:\.\d+)?\b/g, className: "mindmap-code-number" }
+    ];
+    for (const token of tokenPatterns) {
+      let match: RegExpExecArray | null;
+      while ((match = token.pattern.exec(text)) !== null) {
+        ranges.push(Decoration.mark({ class: token.className }).range(line.from + match.index, line.from + match.index + match[0].length));
+      }
+    }
+  }
+  return Decoration.set(ranges, true);
+};
 class MindmapAssociationModal extends Modal {
   private query = "";
   private inputEl!: HTMLInputElement;
@@ -985,6 +1030,19 @@ export class MindmapView extends ItemView {
   private static readonly MOBILE_NODE_DRAG_LONG_PRESS_DELAY = 300;
   private static readonly AI_NODE_APPEAR_MS = 560;
   private static readonly AI_NODE_STAGGER_MS = 480;
+  private readonly onDrawerShortcut = (event: KeyboardEvent): void => {
+    if (event.key.toLowerCase() !== "d" || (!event.metaKey && !event.ctrlKey) || event.altKey || event.shiftKey) {
+      return;
+    }
+    if (!this.selectedNodeId && this.selectedNodeIds.size === 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    void this.toggleDrawerForSelection();
+  };
+
+
   private file: TFile | null = null;
   private doc: MindmapDocument | null = null;
   private layoutEl!: HTMLDivElement;
@@ -2707,7 +2765,7 @@ export class MindmapView extends ItemView {
     window.addEventListener("pointerdown", this.onNewTabIntentPointer, { capture: true });
     window.addEventListener("mousedown", this.onNewTabIntentMouse, { capture: true });
     window.addEventListener("keydown", this.onNewTabIntentKeydown, { capture: true });
-    this.containerEl.addEventListener("keydown", this.onKeydown);
+    this.containerEl.addEventListener("keydown", this.onDrawerShortcut, true);
     if (this.isMobileLayout) {
       this.containerEl.addEventListener("touchstart", this.onContainerZenTouchStart, { passive: false, capture: true });
       this.containerEl.addEventListener("touchmove", this.onContainerZenTouchMove, { passive: false, capture: true });
@@ -3086,6 +3144,10 @@ export class MindmapView extends ItemView {
     this.nodeLinkAddButtonEl = this.drawerEl.createEl("button", { cls: "mindmap-node-link-add-button", text: "+ 添加链接" });
     this.nodeLinkAddButtonEl.type = "button";
     this.nodeLinkAddButtonEl.addEventListener("click", () => {
+      if (this.inboxDrawerItem && this.inboxDraft) {
+        this.addInboxLink();
+        return;
+      }
       if (!this.doc || !this.selectedNodeId) {
         return;
       }
@@ -3363,7 +3425,7 @@ export class MindmapView extends ItemView {
     window.removeEventListener("pointerdown", this.onNewTabIntentPointer, true);
     window.removeEventListener("mousedown", this.onNewTabIntentMouse, true);
     window.removeEventListener("keydown", this.onNewTabIntentKeydown, true);
-    this.containerEl.removeEventListener("keydown", this.onKeydown);
+    this.containerEl.removeEventListener("keydown", this.onDrawerShortcut, true);
     this.canvasEl?.removeEventListener("paste", this.handleCanvasMarkdownPaste as unknown as EventListener);
     if (this.isMobileLayout) {
       this.setZenMode(false);
@@ -4995,17 +5057,19 @@ export class MindmapView extends ItemView {
     this.inboxDraft = !item;
     this.inboxDrawerItem = item ? { ...item } : { id: crypto.randomUUID(), title: "", note: "", createdAt: now, updatedAt: now, status: "pending" };
     this.drawerEl.addClass("is-inbox-drawer");
-    this.inboxSaveButtonEl.removeClass("is-hidden");
+    this.inboxSaveButtonEl.toggleClass("is-hidden", Boolean(item));
     this.selectedNodeId = null;
     this.selectedNodeIds.clear();
     this.nodeLinkInputEl.value = "";
-    this.nodeLinkInputEl.disabled = true;
-    this.nodeLinkAddButtonEl.disabled = true;
-    this.nodeLinkAddButtonEl.toggleClass("is-disabled", true);
+    const isInboxDraft = !item;
+    this.nodeLinkInputEl.disabled = !isInboxDraft;
+    this.nodeLinkAddButtonEl.disabled = !isInboxDraft;
+    this.nodeLinkAddButtonEl.toggleClass("is-disabled", !isInboxDraft);
     this.drawerTitleEl.removeClass("is-hidden");
     this.drawerTitleEl.setAttribute("contenteditable", "true");
     this.drawerTitleEl.textContent = this.inboxDrawerItem.title;
     this.drawerTitleEl.setAttribute("role", "textbox");
+    this.renderInboxLinkList();
     this.setNoteEditorValue(this.inboxDrawerItem.note);
     this.noteInputEl.value = this.inboxDrawerItem.note;
     this.renderNoteEditingMediaPreview(this.inboxDrawerItem.note);
@@ -5031,8 +5095,9 @@ export class MindmapView extends ItemView {
     if (!title) { new Notice("请填写节点标题"); return; }
     this.inboxSaveButtonEl.disabled = true;
     try {
-      await store.put({ ...item, title, updatedAt: Date.now() });
+      await store.put({ ...item, title, links: item.links?.filter((link) => link.target.trim().length > 0), updatedAt: Date.now() });
       this.inboxDraft = false;
+      this.inboxSaveButtonEl.addClass("is-hidden");
       new Notice("收集节点已保存");
     } catch (error) { new Notice(`保存失败：${error}`); }
     finally { this.inboxSaveButtonEl.disabled = false; }
@@ -5143,6 +5208,49 @@ export class MindmapView extends ItemView {
     return true;
   }
 
+  private getInboxDraftLinks(): MindmapNodeLink[] {
+    return this.inboxDrawerItem?.links ?? [];
+  }
+
+  private renderInboxLinkList(): void {
+    if (!this.nodeLinkListEl || !this.inboxDrawerItem) return;
+    this.nodeLinkListEl.empty();
+    this.nodeLinkListEl.removeClass("is-disabled");
+    this.getInboxDraftLinks().forEach((link, index) => {
+      const rowEl = this.nodeLinkListEl.createDiv({ cls: "mindmap-node-link-row" });
+      const labelInputEl = rowEl.createEl("input", { cls: "mindmap-node-link-label-input", type: "text", value: link.label });
+      labelInputEl.placeholder = "说明";
+      const targetInputEl = rowEl.createEl("input", { cls: "mindmap-node-link-target-input", type: "text", value: link.target });
+      targetInputEl.placeholder = "链接目标";
+      const jumpButtonEl = rowEl.createEl("button", { cls: "mindmap-node-link-row-jump", text: "跳转" });
+      jumpButtonEl.type = "button";
+      jumpButtonEl.disabled = !link.target.trim();
+      const deleteButtonEl = rowEl.createEl("button", { cls: "mindmap-node-link-row-delete", text: "×" });
+      deleteButtonEl.type = "button";
+      const commit = (): void => {
+        link.label = labelInputEl.value.trim();
+        link.target = targetInputEl.value.trim();
+        jumpButtonEl.disabled = !link.target;
+      };
+      labelInputEl.addEventListener("input", commit);
+      targetInputEl.addEventListener("input", commit);
+      jumpButtonEl.addEventListener("click", () => {
+        if (link.target.trim()) void this.openLinkedTarget(link.target.trim());
+      });
+      deleteButtonEl.addEventListener("click", () => {
+        this.inboxDrawerItem?.links?.splice(index, 1);
+        this.renderInboxLinkList();
+      });
+    });
+  }
+
+  private addInboxLink(): void {
+    if (!this.inboxDrawerItem) return;
+    if (!this.inboxDrawerItem.links) this.inboxDrawerItem.links = [];
+    this.inboxDrawerItem.links.push({ id: crypto.randomUUID(), label: "", target: "" });
+    this.renderInboxLinkList();
+    this.nodeLinkListEl.lastElementChild?.querySelector<HTMLInputElement>(".mindmap-node-link-target-input")?.focus();
+  }
   private getNodeLinks(node: MindmapNode): MindmapNodeLink[] {
     const links = [...(node.links ?? [])]
       .map((link) => ({ ...link, target: link.target.trim(), label: link.label.trim() }))
@@ -6849,6 +6957,7 @@ export class MindmapView extends ItemView {
           updateListener,
           editorMouseHandlers,
           noteInlineImagePlugin(this.app),
+          codeBlockPlugin,
           EditorView.lineWrapping,
           EditorView.theme({
             "&": { height: "100%" },
@@ -7802,6 +7911,8 @@ export class MindmapView extends ItemView {
         if (!child) throw new Error("目标节点不存在");
         child.title = item.title;
         child.note = item.note;
+        child.links = item.links?.map((link) => ({ ...link }));
+        child.linkTarget = child.links?.[0]?.target ?? "";
         child.inboxSourceId = item.id;
         this.normalizeLayoutKeepingNodePosition(parent);
         try { await this.flushSave(); }
