@@ -834,6 +834,56 @@
    filter: drop-shadow(0 0 8px rgba(143, 208, 255, 0.95)) drop-shadow(0 0 18px rgba(76, 171, 255, 0.55));
  }
 
+ .mindmap-node-group.is-focus-pulse .mindmap-node {
+   animation: mindmap-node-focus-pulse 0.9s ease-in-out;
+   stroke: #ffe38a;
+   stroke-width: 4;
+   filter:
+     drop-shadow(0 0 12px rgba(255, 227, 138, 0.95))
+     drop-shadow(0 0 26px rgba(255, 209, 102, 0.65))
+     drop-shadow(0 0 40px rgba(255, 183, 77, 0.4));
+ }
+
+ .mindmap-node-group.is-focus-pulse .mindmap-node-title {
+   animation: mindmap-node-title-pop 0.9s ease-in-out;
+ }
+
+ @keyframes mindmap-node-focus-pulse {
+
+   0%,
+   100% {
+     stroke-width: 3.2;
+     filter: drop-shadow(0 0 6px rgba(255, 227, 138, 0.6));
+   }
+
+   25%,
+   75% {
+     stroke-width: 4.4;
+     filter:
+       drop-shadow(0 0 14px rgba(255, 227, 138, 1))
+       drop-shadow(0 0 30px rgba(255, 209, 102, 0.7));
+   }
+
+   50% {
+     stroke-width: 5;
+     filter:
+       drop-shadow(0 0 18px rgba(255, 236, 170, 1))
+       drop-shadow(0 0 44px rgba(255, 209, 102, 0.85));
+   }
+ }
+
+ @keyframes mindmap-node-title-pop {
+
+   0%,
+   100% {
+     transform: scale(1);
+   }
+
+   35% {
+     transform: scale(1.08);
+   }
+ }
+
  .mindmap-node.is-drop-target {
    stroke-width: 2.6;
    filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.95)) drop-shadow(0 0 18px rgba(255, 255, 255, 0.45));
@@ -2399,6 +2449,44 @@
 
  .mindmap-inbox-toggle {
    float: left;
+ }
+
+ .mindmap-inbox-return-button {
+   display: flex;
+   align-items: center;
+   justify-content: center;
+   width: 34px;
+   height: 34px;
+   margin-bottom: 8px;
+   padding: 0;
+   border: 1px solid var(--background-modifier-border);
+   border-radius: 50%;
+   color: var(--text-normal);
+   background: var(--background-primary);
+   box-shadow: 0 3px 12px rgba(0, 0, 0, .18);
+   cursor: pointer;
+   transition: transform .15s ease, box-shadow .15s ease, color .15s ease, border-color .15s ease;
+ }
+
+ .mindmap-inbox-return-button:hover {
+   color: var(--text-on-accent);
+   border-color: var(--interactive-accent);
+   background: var(--interactive-accent);
+   box-shadow: 0 5px 18px rgba(0, 0, 0, .26);
+   transform: translateX(-2px);
+ }
+
+ .mindmap-inbox-return-button:active {
+   transform: translateX(-2px) scale(.94);
+ }
+
+ .mindmap-inbox-return-button svg {
+   width: 18px;
+   height: 18px;
+ }
+
+ .mindmap-inbox-return-button.is-hidden {
+   display: none;
  }
 
  .mindmap-inbox-panel {

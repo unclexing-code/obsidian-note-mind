@@ -36,6 +36,7 @@ export interface MindmapDocument {
   version: 1;
   root: MindmapNode;
   selfPath?: string;
+  mapId?: string;
 }
 
 export const createDefaultMindmap = (): MindmapDocument => ({

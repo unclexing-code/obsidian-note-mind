@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, setIcon } from "obsidian";
 import { InboxStore, type InboxItem } from "./inbox";
 
 class InboxEditor extends Modal {
@@ -38,8 +38,42 @@ export const openInboxEditor = (app: App, store: InboxStore): void => {
 
 export const INBOX_DRAG_TYPE = "application/x-mindmap-inbox";
 
-export function mountInboxPanel(app: App, container: HTMLElement, store: InboxStore, onImport: (id: string) => Promise<void>, onOpen: (item: InboxItem) => void, onCreate: () => void): () => void {
+export function mountInboxPanel(
+  app: App,
+  container: HTMLElement,
+  store: InboxStore,
+  onImport: (id: string) => Promise<void>,
+  onOpen: (item: InboxItem) => void,
+  onCreate: () => void,
+  onReturn: () => void,
+  canReturn: () => boolean,
+  getReturnInfo: () => { fromPath: string | null; fromNodeId: string | null } = () => ({ fromPath: null, fromNodeId: null })
+): () => void {
   const host = container.createDiv({ cls: "mindmap-inbox" });
+  const returnButton = host.createEl("button", { cls: "mindmap-inbox-return-button is-hidden" });
+  returnButton.type = "button";
+  returnButton.setAttribute("aria-label", "返回上一导图");
+  setIcon(returnButton, "arrow-left");
+  returnButton.addEventListener("click", () => {
+    if (canReturn()) {
+      onReturn();
+    } else {
+      returnButton.addClass("is-hidden");
+    }
+  });
+  const refreshReturn = (): void => {
+    const can = canReturn();
+    returnButton.toggleClass("is-hidden", !can);
+    returnButton.toggleAttribute("hidden", !can);
+    if (can) {
+      const info = getReturnInfo();
+      returnButton.title = info.fromPath
+        ? `返回来源导图：${info.fromPath}${info.fromNodeId ? `\n来源节点 ID：${info.fromNodeId}` : ""}`
+        : "返回上一导图";
+    }
+  };
+  const returnObserver = new MutationObserver(refreshReturn);
+  returnObserver.observe(document.body, { childList: true, subtree: true });
   const toggle = host.createEl("button", { text: "全局收集箱", cls: "mindmap-inbox-toggle" });
   const panel = host.createDiv({ cls: "mindmap-inbox-panel" });
   panel.hidden = true;
@@ -89,5 +123,5 @@ export function mountInboxPanel(app: App, container: HTMLElement, store: InboxSt
   // Keep canvas keyboard shortcuts from handling editing and card actions.
   host.addEventListener("keydown", (event) => event.stopPropagation());
   host.addEventListener("pointerdown", (event) => event.stopPropagation());
-  return () => { unsubscribe(); host.remove(); };
+  return () => { unsubscribe(); returnObserver.disconnect(); host.remove(); };
 }

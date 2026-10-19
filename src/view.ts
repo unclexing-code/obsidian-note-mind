@@ -1137,6 +1137,7 @@ export class MindmapView extends ItemView {
   private isZenMode = false;
   private shouldForceMobileZenOnNextRender = false;
   private navigationStack: string[] = [];
+  private backChain = new Map<string, { fromPath: string; fromNodeId: string | null }>();
   private undoStack: MindmapDocument[] = [];
   private redoStack: MindmapDocument[] = [];
   private isApplyingHistory = false;
@@ -1145,6 +1146,8 @@ export class MindmapView extends ItemView {
   private shouldCenterOnNextRender = false;
   private shouldFocusRootOnNextRender = false;
   private pendingFocusLinkedFromPath: string | null = null;
+  private pendingFocusLinkedFromNodeId: string | null = null;
+  private pendingFocusNodeId: string | null = null;
   private readonly textMeasureCanvas = document.createElement("canvas");
   private marqueeSelection: { startX: number; startY: number; currentX: number; currentY: number } | null = null;
   private mobileCanvasLongPressTimer: number | null = null;
@@ -2790,7 +2793,7 @@ export class MindmapView extends ItemView {
     this.canvasEl = this.layoutEl.createDiv({ cls: "mindmap-canvas" });
     const inbox = getMindmapPlugin(this.app as ObsidianAppWithPlugins)?.inbox;
     if (inbox) {
-      this.register(mountInboxPanel(this.app, this.containerEl, inbox, (id) => this.importInboxItem(id), (item) => { void this.openInboxDrawer(item); }, () => { void this.openInboxDrawer(); }));
+      this.register(mountInboxPanel(this.app, this.containerEl, inbox, (id) => this.importInboxItem(id), (item) => { void this.openInboxDrawer(item); }, () => { void this.openInboxDrawer(); }, () => { void this.goBackFromLinkedTarget(); }, () => !!this.pendingFocusLinkedFromPath || this.navigationStack.length > 0, () => ({ fromPath: this.pendingFocusLinkedFromPath, fromNodeId: this.pendingFocusLinkedFromNodeId })));
       const clearInboxDropTarget = (): void => {
         this.canvasEl.querySelectorAll(".is-inbox-drop-target").forEach((el) => {
           el.classList.remove("is-inbox-drop-target");
@@ -3565,7 +3568,7 @@ export class MindmapView extends ItemView {
 
   async setState(state: unknown, result: ViewStateResult): Promise<void> {
     console.log('[MindmapView] 📥 setState called:', state);
-    const nextState = (state ?? {}) as { file?: string; focusLinkedFrom?: string };
+    const nextState = (state ?? {}) as { file?: string; focusLinkedFrom?: string; focusLinkedFromNodeId?: string; focusNodeId?: string };
     const path = nextState.file;
     if (!path) {
       console.warn('[MindmapView] ⚠️ setState called without file path');
@@ -3585,6 +3588,8 @@ export class MindmapView extends ItemView {
       return;
     }
     this.pendingFocusLinkedFromPath = nextState.focusLinkedFrom ? normalizePath(nextState.focusLinkedFrom) : null;
+    this.pendingFocusLinkedFromNodeId = nextState.focusLinkedFromNodeId ?? null;
+    this.pendingFocusNodeId = nextState.focusNodeId ?? null;
 
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
@@ -3602,15 +3607,23 @@ export class MindmapView extends ItemView {
     console.log('[MindmapView] 📄 Loading file:', path);
     this.file = file;
     await this.loadFromFile();
-    this.focusLinkedNodeFromPendingPath();
+    if (this.pendingFocusNodeId) {
+      const focusId = this.pendingFocusNodeId;
+      this.pendingFocusNodeId = null;
+      this.revealNodeById(focusId);
+    } else {
+      this.focusLinkedNodeFromPendingPath();
+    }
     this.renderMindmap();
     console.log('[MindmapView] ✅ setState complete for:', path);
   }
 
-  getState(): { file?: string; focusLinkedFrom?: string } {
+  getState(): { file?: string; focusLinkedFrom?: string; focusLinkedFromNodeId?: string; focusNodeId?: string } {
     return {
       file: this.file?.path,
-      focusLinkedFrom: this.pendingFocusLinkedFromPath ?? undefined
+      focusLinkedFrom: this.pendingFocusLinkedFromPath ?? undefined,
+      focusLinkedFromNodeId: this.pendingFocusLinkedFromNodeId ?? undefined,
+      focusNodeId: this.pendingFocusNodeId ?? undefined
     };
   }
 
@@ -4087,8 +4100,7 @@ export class MindmapView extends ItemView {
         text.classList.add("is-ai-generating");
       }
       text.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
-      const linkSuffix = titleLinks.length > 1 ? ` 🔗${titleLinks.length}` : titleLinks.length === 1 ? " 🔗" : "";
-      text.textContent = isAiGenerating ? `${node.title} ✨${linkSuffix}` : `${node.title}${linkSuffix}`;
+      text.textContent = isAiGenerating ? `${node.title} ✨` : node.title;
       if (this.editingNodeId === node.id) {
         titleBox.style.display = "none";
       }
@@ -4639,6 +4651,115 @@ export class MindmapView extends ItemView {
     return `obsidian://open?file=${encodeURIComponent(file.path)}`;
   }
 
+  private mindmapIdToPathCache = new Map<string, string>();
+  private mindmapIdPathCacheBuilt = false;
+
+  private async ensureMindmapIdPathCache(): Promise<void> {
+    if (this.mindmapIdPathCacheBuilt) {
+      return;
+    }
+    this.mindmapIdPathCacheBuilt = true;
+    for (const file of this.app.vault.getFiles().filter((candidate) => this.isMindmapFile(candidate))) {
+      try {
+        const doc = JSON.parse(await this.app.vault.cachedRead(file)) as Partial<MindmapDocument>;
+        if (doc.mapId) {
+          this.mindmapIdToPathCache.set(doc.mapId, file.path);
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  private async getStableMindmapLink(file: TFile): Promise<string> {
+    try {
+      const document = normalizeMindmapDocument(JSON.parse(await this.app.vault.cachedRead(file)) as MindmapDocument);
+      const mapId = document.mapId ?? "";
+      if (mapId) {
+        this.mindmapIdToPathCache.set(mapId, file.path);
+        const rawOnDisk = JSON.parse(await this.app.vault.cachedRead(file)) as Partial<MindmapDocument>;
+        if (rawOnDisk.mapId !== mapId) {
+          await this.app.vault.process(file, (text) => {
+            try {
+              const parsed = JSON.parse(text) as Partial<MindmapDocument>;
+              parsed.mapId = mapId;
+              return JSON.stringify(parsed, null, 2);
+            } catch {
+              return text;
+            }
+          });
+        }
+      }
+      return `mindmap://${encodeURIComponent(mapId)}`;
+    } catch {
+      return this.getMindmapObsidianUrl(file);
+    }
+  }
+
+  private buildNodeMindmapLink(nodeId: string): string {
+    if (!this.doc) {
+      return "";
+    }
+    const mapId = this.doc.mapId ?? "";
+    if (!mapId) {
+      return this.file ? this.getMindmapObsidianUrl(this.file) : "";
+    }
+    return `mindmap://${encodeURIComponent(mapId)}?node=${encodeURIComponent(nodeId)}`;
+  }
+
+  private async resolveMindmapLink(rawTarget: string): Promise<{ file: TFile; nodeId: string | null } | null> {
+    const input = rawTarget.trim();
+    if (!input) {
+      return null;
+    }
+    if (input.startsWith("mindmap://")) {
+      try {
+        const url = new URL(input);
+        const mapId = decodeURIComponent(url.hostname || url.pathname.replace(/^\//, ""));
+        const nodeIdParam = url.searchParams.get("node");
+        await this.ensureMindmapIdPathCache();
+        const cachedPath = this.mindmapIdToPathCache.get(mapId);
+        let path: string | null = cachedPath ?? null;
+        if (!path) {
+          for (const file of this.app.vault.getFiles().filter((candidate) => this.isMindmapFile(candidate))) {
+            try {
+              const doc = JSON.parse(await this.app.vault.cachedRead(file)) as Partial<MindmapDocument>;
+              if (doc.mapId === mapId) {
+                path = file.path;
+                this.mindmapIdToPathCache.set(mapId, file.path);
+                break;
+              }
+            } catch {
+              continue;
+            }
+          }
+        }
+        if (!path) {
+          return null;
+        }
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile ? { file, nodeId: nodeIdParam ? decodeURIComponent(nodeIdParam) : null } : null;
+      } catch {
+        return null;
+      }
+    }
+    if (input.startsWith("obsidian://")) {
+      try {
+        const url = new URL(input);
+        const fileParam = url.searchParams.get("file");
+        if (!fileParam) {
+          return null;
+        }
+        const path = normalizePath(decodeURIComponent(fileParam));
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile && this.isMindmapFile(file) ? { file, nodeId: null } : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
   private getNormalizedLinkedFilePath(rawLink: string): string | null {
     const input = rawLink.trim();
     if (!input) {
@@ -4709,8 +4830,7 @@ export class MindmapView extends ItemView {
   private isRootMindmapRootNode(node: MindmapNode): boolean {
     return !!this.file
       && normalizePath(this.file.path) === normalizePath("root.mindmap")
-      && node.id === this.doc?.root.id
-      && node.title.trim().toLowerCase() === "root";
+      && node.id === this.doc?.root.id;
   }
 
   private clearRootMindmapRootNodeLinkTarget(): boolean {
@@ -4831,12 +4951,8 @@ export class MindmapView extends ItemView {
       return false;
     }
     const normalizedSourcePath = normalizePath(sourcePath);
-    const rootLinkChanged = this.ensureRootSourceLink(normalizedSourcePath);
     const linkedNode = this.findNodeLinkedToPath(normalizedSourcePath);
     if (!linkedNode) {
-      if (rootLinkChanged) {
-        this.requestSave();
-      }
       return false;
     }
     const linkedNodeId = linkedNode.id;
@@ -4845,7 +4961,7 @@ export class MindmapView extends ItemView {
     if (expanded) {
       this.normalizeLayout();
     }
-    if (expanded || rootLinkChanged) {
+    if (expanded) {
       this.requestSave();
     }
     this.shouldCenterOnNextRender = false;
@@ -4856,6 +4972,7 @@ export class MindmapView extends ItemView {
       this.centerViewportOnNodeById(linkedNodeId);
       window.requestAnimationFrame(() => this.centerViewportOnNodeById(linkedNodeId));
     });
+    this.playNodeFocusAnimation(linkedNodeId);
     // new Notice(`已定位到关联节点：${linkedNodeTitle}`);
     return true;
   }
@@ -4865,7 +4982,7 @@ export class MindmapView extends ItemView {
     if (!sourcePath) {
       return;
     }
-    this.pendingFocusLinkedFromPath = null;
+    // 保留 pendingFocusLinkedFromPath / pendingFocusLinkedFromNodeId 供返回按钮使用，仅做一次性定位
     if (!this.focusLinkedNodeFromPath(sourcePath)) {
       // new Notice("未找到指向来源导图的关联节点");
     }
@@ -4896,7 +5013,24 @@ export class MindmapView extends ItemView {
       this.centerViewportOnNodeById(nodeId);
       window.requestAnimationFrame(() => this.centerViewportOnNodeById(nodeId));
     });
+    this.playNodeFocusAnimation(nodeId);
     return true;
+  }
+
+  private playNodeFocusAnimation(nodeId: string): void {
+    const pulses: number[] = [0, 350, 700];
+    for (const delay of pulses) {
+      window.setTimeout(() => {
+        const group = this.canvasEl.querySelector<SVGGElement>(`g[data-id="${CSS.escape(nodeId)}"]`);
+        if (!group) {
+          return;
+        }
+        group.classList.remove("is-focus-pulse");
+        void group.getBoundingClientRect();
+        group.classList.add("is-focus-pulse");
+        window.setTimeout(() => group.classList.remove("is-focus-pulse"), 900);
+      }, delay);
+    }
   }
 
   private getMindmapLinkCandidates(): MindmapLinkCandidate[] {
@@ -4964,6 +5098,7 @@ export class MindmapView extends ItemView {
         node.linkTarget = "";
         node.links = [];
         this.requestSave();
+        this.renderMindmap();
       }
       return;
     }
@@ -4991,17 +5126,23 @@ export class MindmapView extends ItemView {
     if (!node) {
       return;
     }
+    if (this.isRootMindmapRootNode(node)) {
+      new Notice("root 导图的根节点是特殊节点，不允许设置链接");
+      return;
+    }
     const modal = new MindmapAssociationModal(
       this.app,
       this.getMindmapLinkCandidates().filter((candidate) => candidate.file.path !== this.file?.path),
       node.title.trim() || "新建导图",
       (candidate) => {
-        void this.assignNodeLinkTarget(nodeId, candidate.obsidianUrl);
-        // new Notice(`已关联到导图：${candidate.title}`);
+        void this.getStableMindmapLink(candidate.file).then((stableLink) => {
+          void this.assignNodeLinkTarget(nodeId, stableLink);
+          // new Notice(`已关联到导图：${candidate.title}`);
+        });
       },
       async (title) => {
         const newFile = await this.createMindmapForAssociation(title);
-        await this.assignNodeLinkTarget(nodeId, this.getMindmapObsidianUrl(newFile));
+        await this.assignNodeLinkTarget(nodeId, await this.getStableMindmapLink(newFile));
         await this.openInternalTarget(newFile.path, true);
       }
     );
@@ -7947,6 +8088,16 @@ export class MindmapView extends ItemView {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
+    if (this.isRootMindmapRootNode(this.doc.root) && (this.doc.root.linkTarget || (this.doc.root.links?.length ?? 0) > 0)) {
+      this.doc.root.linkTarget = "";
+      this.doc.root.links = [];
+    }
+    if (!this.doc.mapId) {
+      this.doc.mapId = crypto.randomUUID();
+    }
+    if (this.doc.selfPath !== this.file.path) {
+      this.doc.selfPath = this.file.path;
+    }
     this.isReloadingFromDisk = true;
     try {
       await this.app.vault.modify(this.file, JSON.stringify(this.doc, null, 2));
@@ -8003,6 +8154,18 @@ export class MindmapView extends ItemView {
       return;
     }
 
+    if (input.startsWith("mindmap://")) {
+      const resolved = await this.resolveMindmapLink(input);
+      if (!resolved) {
+        console.warn('[MindmapView] ⚠️ Unresolved mindmap link:', input);
+        new Notice("未找到该链接对应的导图");
+        return;
+      }
+      const nodeId = resolved.nodeId;
+      await this.openInternalTarget(resolved.file.path, true, this.file?.path ?? null, nodeId, this.selectedNodeId);
+      return;
+    }
+
     if (input.startsWith("obsidian://")) {
       try {
         const url = new URL(input);
@@ -8054,7 +8217,14 @@ export class MindmapView extends ItemView {
     }
   }
 
-  private async openInternalTarget(path: string, inNewTab: boolean, focusLinkedFromPath = this.file?.path ?? null): Promise<void> {
+  private async openInternalTarget(
+    path: string,
+    inNewTab: boolean,
+    focusLinkedFromPath = this.file?.path ?? null,
+    focusNodeId: string | null = null,
+    focusLinkedFromNodeId: string | null = this.selectedNodeId,
+    isRestoreNavigation = false
+  ): Promise<void> {
     console.log('[MindmapView] 🔍 openInternalTarget START', {
       path,
       inNewTab,
@@ -8071,9 +8241,6 @@ export class MindmapView extends ItemView {
     }
 
     const currentPath = this.file?.path;
-    if (currentPath && currentPath !== target.path) {
-      this.navigationStack.push(currentPath);
-    }
 
     const isMindmap = target.extension === "mindmap" || target.name.endsWith(".mindmap.json");
     console.log('[MindmapView] 📄 Is mindmap file:', isMindmap, 'extension:', target.extension);
@@ -8094,27 +8261,47 @@ export class MindmapView extends ItemView {
         active: true,
         state: {
           file: target.path,
-          focusLinkedFrom: normalizedFocusLinkedFromPath ?? undefined
+          focusLinkedFrom: normalizedFocusLinkedFromPath ?? undefined,
+          focusLinkedFromNodeId: focusLinkedFromNodeId ?? undefined,
+          focusNodeId: focusNodeId ?? undefined
         }
       });
       this.app.workspace.revealLeaf(targetLeaf);
 
       if (targetLeaf === this.leaf) {
+        if (currentPath && currentPath !== target.path && !isRestoreNavigation) {
+          this.navigationStack.push(currentPath);
+          this.backChain.set(target.path, { fromPath: currentPath, fromNodeId: focusLinkedFromNodeId });
+        }
         this.file = target;
         this.pendingFocusLinkedFromPath = normalizedFocusLinkedFromPath;
+        this.pendingFocusLinkedFromNodeId = focusLinkedFromNodeId;
+        this.pendingFocusNodeId = focusNodeId;
         await this.loadFromFile();
         this.closeDrawer();
         if (this.isMobileLayout) {
           this.setZenMode(true);
         }
-        this.focusLinkedNodeFromPendingPath();
+        if (this.pendingFocusNodeId) {
+          const focusId = this.pendingFocusNodeId;
+          this.pendingFocusNodeId = null;
+          this.revealNodeById(focusId);
+        } else {
+          this.focusLinkedNodeFromPendingPath();
+        }
         this.renderMindmap();
       } else if (targetLeaf.view instanceof MindmapView) {
         const targetView = targetLeaf.view as MindmapView;
+        if (currentPath && currentPath !== target.path && !isRestoreNavigation) {
+          targetView.navigationStack.push(currentPath);
+          targetView.backChain.set(target.path, { fromPath: currentPath, fromNodeId: focusLinkedFromNodeId });
+        }
         if (Platform.isMobile) {
           targetView.setZenMode(true);
         }
-        if (normalizedFocusLinkedFromPath) {
+        if (focusNodeId) {
+          targetView.revealNodeById(focusNodeId);
+        } else if (normalizedFocusLinkedFromPath) {
           targetView.focusLinkedNodeFromPath(normalizedFocusLinkedFromPath);
         }
       }
@@ -8147,13 +8334,42 @@ export class MindmapView extends ItemView {
   }
 
   private async goBackFromLinkedTarget(): Promise<void> {
+    const linkedFrom = this.pendingFocusLinkedFromPath;
+    if (linkedFrom) {
+      const linkedFromNodeId = this.pendingFocusLinkedFromNodeId;
+      const currentPath = this.file?.path ?? null;
+      const originLeaf = this.leaf;
+      const originPath = this.file?.path ?? null;
+      this.pendingFocusLinkedFromPath = null;
+      this.pendingFocusLinkedFromNodeId = null;
+      if (currentPath) {
+        this.backChain.delete(currentPath);
+      }
+      // 目标导图（B）自己的返回信息，恢复后 B 仍可继续返回 A
+      const restoredBack = currentPath ? this.backChain.get(linkedFrom) : undefined;
+      await this.openInternalTarget(linkedFrom, false, restoredBack?.fromPath ?? null, linkedFromNodeId, restoredBack?.fromNodeId ?? linkedFromNodeId, true);
+      // 返回后销毁跳转打开的导图 leaf，避免 tab 残留旧状态
+      const activeView = this.app.workspace.getActiveViewOfType(MindmapView);
+      const returnedElsewhere = !activeView || activeView.leaf !== originLeaf;
+      if (returnedElsewhere && originLeaf && originPath) {
+        const originView = originLeaf.view;
+        if (originView instanceof MindmapView && originView.file?.path === originPath) {
+          try {
+            originLeaf.detach();
+          } catch (error) {
+            console.warn('[MindmapView] ⚠️ Failed to detach leaf after goBack:', error);
+          }
+        }
+      }
+      return;
+    }
     const previousPath = this.navigationStack.pop();
     if (!previousPath) {
       // new Notice("没有可返回的上一个位置");
       return;
     }
-
-    await this.openInternalTarget(previousPath, false, null);
+    const restoredBack = this.file?.path ? this.backChain.get(previousPath) : undefined;
+    await this.openInternalTarget(previousPath, false, restoredBack?.fromPath ?? null, null, restoredBack?.fromNodeId ?? null, true);
   }
 
   private createChildNode(parentId: string): void {
@@ -8615,6 +8831,22 @@ export class MindmapView extends ItemView {
         this.openMindmapAssociationModal(nodeId);
       });
     });
+    if (node && !this.isRootMindmapRootNode(node)) {
+      menu.addItem((item) => {
+        item.setTitle("复制节点链接").setIcon("copy").onClick(() => {
+          const link = this.buildNodeMindmapLink(nodeId);
+          if (!link) {
+            new Notice("无法生成节点链接");
+            return;
+          }
+          void navigator.clipboard?.writeText(link).then(() => {
+            new Notice("已复制节点链接");
+          }).catch(() => {
+            new Notice("复制失败，请重试");
+          });
+        });
+      });
+    }
     menu.addItem((item) => {
       item.setTitle("AI 生成子节点").setIcon("sparkles").onClick(() => {
         this.openAiGenerateChildNodesModal(nodeId);
@@ -8735,14 +8967,6 @@ export class MindmapView extends ItemView {
     const baseName = `${node.title} - 分离`;
     const newPath = this.getNextMindmapPath(mindmapFolderPath, baseName);
 
-    // Add a back link to the original mindmap
-    // 1. In the note (Markdown text link)
-    const backLinkNote = `\n\n---\n\n[← 返回原导图](${this.file.path})`;
-    clonedNode.note = (clonedNode.note || "") + backLinkNote;
-
-    // 2. Set linkTarget property for immediate visual feedback
-    clonedNode.linkTarget = this.file.path;
-
     // Create a new mindmap document with the cloned node as root
     const newDoc: MindmapDocument = {
       version: 1,
@@ -8813,7 +9037,7 @@ export class MindmapView extends ItemView {
       // Optionally open the new mindmap in a new tab
       const shouldOpen = window.confirm("是否在新标签页中打开新导图？");
       if (shouldOpen) {
-        await this.openInternalTarget(newFile.path, true, null);
+        await this.openInternalTarget(newFile.path, true, this.file.path, null, linkNode.id);
       }
     } catch (error) {
       new Notice(`分离失败：${String(error)}`);

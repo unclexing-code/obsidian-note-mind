@@ -13,7 +13,8 @@ export const normalizeMindmapDocument = (doc: MindmapDocument): MindmapDocument 
   const normalized: MindmapDocument = {
     version: 1,
     root: doc.root,
-    selfPath: doc.selfPath
+    selfPath: doc.selfPath,
+    mapId: typeof doc.mapId === "string" && doc.mapId.trim() ? doc.mapId.trim() : crypto.randomUUID()
   };
   walkNodes(normalized.root, (node) => {
     if (typeof node.linkTarget !== "string") {
