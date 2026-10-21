@@ -45,7 +45,7 @@ class MindmapGlobalSearchModal extends Modal {
   constructor(
     app: App,
     private readonly search: (query: string) => Promise<MindmapSearchResult[]>,
-    private readonly onChoose: (result: MindmapSearchResult) => Promise<void>
+    private readonly onChoose: (result: MindmapSearchResult, openInNewTab: boolean) => Promise<void>
   ) {
     super(app);
   }
@@ -73,7 +73,7 @@ class MindmapGlobalSearchModal extends Modal {
     this.inputEl.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && this.results[0]) {
         event.preventDefault();
-        void this.chooseResult(this.results[0]);
+        void this.chooseResult(this.results[0], false);
       }
     });
 
@@ -133,12 +133,7 @@ class MindmapGlobalSearchModal extends Modal {
     }
     this.statusEl.setText(`找到 ${results.length} 条结果`);
     results.forEach((result) => {
-      const itemEl = this.resultsEl.createEl("button", { cls: "mindmap-global-search-result" });
-      itemEl.type = "button";
-      itemEl.addEventListener("click", () => {
-        void this.chooseResult(result);
-      });
-
+      const itemEl = this.resultsEl.createDiv({ cls: "mindmap-global-search-result" });
       const titleEl = itemEl.createDiv({ cls: "mindmap-global-search-result-title" });
       titleEl.createSpan({ cls: "mindmap-global-search-result-node", text: result.nodeTitle || "未命名节点" });
       titleEl.createSpan({
@@ -146,14 +141,28 @@ class MindmapGlobalSearchModal extends Modal {
         text: result.matchType === "title" ? "节点" : "笔记"
       });
 
+      const actionsEl = itemEl.createDiv({ cls: "mindmap-global-search-result-actions" });
+      const openButton = actionsEl.createEl("button", { text: "跳转" });
+      openButton.type = "button";
+      openButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.chooseResult(result, false);
+      });
+      const openNewTabButton = actionsEl.createEl("button", { text: "新页签跳转" });
+      openNewTabButton.type = "button";
+      openNewTabButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this.chooseResult(result, true);
+      });
+
       itemEl.createDiv({ cls: "mindmap-global-search-result-excerpt", text: result.excerpt });
       itemEl.createDiv({ cls: "mindmap-global-search-result-path", text: `${result.file.path} · ${result.path.join(" / ")}` });
     });
   }
 
-  private async chooseResult(result: MindmapSearchResult): Promise<void> {
+  private async chooseResult(result: MindmapSearchResult, openInNewTab = false): Promise<void> {
     this.close();
-    await this.onChoose(result);
+    await this.onChoose(result, openInNewTab);
   }
 }
 
@@ -592,7 +601,7 @@ export default class MindmapPlugin extends Plugin {
     new MindmapGlobalSearchModal(
       this.app,
       (query) => this.searchMindmapFiles(query),
-      (result) => this.openSearchResult(result)
+      (result, openInNewTab) => this.openSearchResult(result, openInNewTab)
     ).open();
   }
 
@@ -671,8 +680,10 @@ export default class MindmapPlugin extends Plugin {
     return `${prefix}${compactText.slice(start, end)}${suffix}`;
   }
 
-  private async openSearchResult(result: MindmapSearchResult): Promise<void> {
-    const leaf = await this.openMindmapFile(result.file);
+  private async openSearchResult(result: MindmapSearchResult, openInNewTab = false): Promise<void> {
+    const activeView = this.app.workspace.getActiveViewOfType(MindmapView);
+    const sourcePath = activeView?.getState().file ?? null;
+    const leaf = await this.openMindmapFile(result.file, openInNewTab, sourcePath);
     const view = leaf.view;
     if (view instanceof MindmapView) {
       view.revealNodeById(result.nodeId, { openDrawer: result.matchType === "note" });
@@ -694,11 +705,11 @@ export default class MindmapPlugin extends Plugin {
     this.dedupeTimers.add(timer);
   }
 
-  private async openMindmapFile(file: TFile): Promise<WorkspaceLeaf> {
-    const existingLeaf = this.findLeafByFilePath(file.path) ?? this.findMindmapLeafByPath(file.path);
+  private async openMindmapFile(file: TFile, openInNewTab = false, focusLinkedFrom: string | null = null): Promise<WorkspaceLeaf> {
+    const existingLeaf = openInNewTab ? undefined : (this.findLeafByFilePath(file.path) ?? this.findMindmapLeafByPath(file.path));
     const activeLeaf = this.app.workspace.getMostRecentLeaf();
     const canReuseActiveLeaf = !!activeLeaf && ["empty", MINDMAP_VIEW_TYPE].includes(activeLeaf.view.getViewType());
-    const leaf = existingLeaf ?? (canReuseActiveLeaf ? activeLeaf : this.app.workspace.getLeaf(true));
+    const leaf = existingLeaf ?? (openInNewTab ? this.app.workspace.getLeaf(true) : (canReuseActiveLeaf ? activeLeaf : this.app.workspace.getLeaf(true)));
 
     if (!existingLeaf) {
       this.logTabDebug(canReuseActiveLeaf ? "open-mindmap-file:reuse-active-leaf" : "open-mindmap-file:new-leaf", {
@@ -717,10 +728,16 @@ export default class MindmapPlugin extends Plugin {
       targetLeafType: leaf.view.getViewType()
     });
     this.preferredLeafIds.set(file.path, this.getLeafId(leaf));
+    if (openInNewTab) {
+      window.__mindmapNotesNewTabIntent = { until: Date.now() + 1500 };
+    }
     await leaf.setViewState({
       type: MINDMAP_VIEW_TYPE,
       active: true,
-      state: { file: file.path }
+      state: {
+        file: file.path,
+        focusLinkedFrom: focusLinkedFrom ?? undefined
+      }
     });
     this.app.workspace.revealLeaf(leaf);
     this.logTabDebug("open-mindmap-file:done", {

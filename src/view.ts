@@ -3504,26 +3504,34 @@ export class MindmapView extends ItemView {
     return !!firstParent && firstParent === secondParent;
   }
 
-  private async redirectDuplicateMindmapOpen(path: string): Promise<boolean> {
+  private async redirectMindmapOpen(path: string): Promise<boolean> {
     if (this.shouldAllowDuplicateMindmapTab()) {
       return false;
     }
     const existingLeaf = this.app.workspace.getLeavesOfType(MINDMAP_VIEW_TYPE).find((leaf) => {
-      if (leaf === this.leaf) {
+      if (leaf === this.leaf || !this.isSameTabContainer(this.leaf, leaf)) {
         return false;
       }
-      const view = leaf.view;
-      return view instanceof MindmapView
-        && normalizePath(view.getState().file ?? "") === normalizePath(path)
-        && this.isSameTabContainer(this.leaf, leaf);
+      return leaf.view instanceof MindmapView;
     });
     if (!existingLeaf) {
       return false;
     }
+    const existingView = existingLeaf.view;
+    const existingPath = existingView instanceof MindmapView ? existingView.getState().file : undefined;
+    console.log('[MindmapView] ↩️ Reusing existing mindmap tab:', {
+      from: existingPath,
+      to: path
+    });
     this.app.workspace.revealLeaf(existingLeaf);
     this.file = null;
     this.doc = null;
     this.detachWorkspaceLeaf(this.leaf);
+    await existingLeaf.setViewState({
+      type: MINDMAP_VIEW_TYPE,
+      active: true,
+      state: { file: path }
+    });
     return true;
   }
 
@@ -3576,7 +3584,7 @@ export class MindmapView extends ItemView {
       return;
     }
     const preflightFile = this.app.vault.getAbstractFileByPath(path);
-    if (preflightFile instanceof TFile && this.isMindmapFile(preflightFile) && await this.redirectDuplicateMindmapOpen(preflightFile.path)) {
+    if (preflightFile instanceof TFile && this.isMindmapFile(preflightFile) && await this.redirectMindmapOpen(preflightFile.path)) {
       console.log('[MindmapView] ↩️ Preflight redirected duplicate mindmap tab to existing leaf:', preflightFile.path);
       return;
     }
@@ -5501,13 +5509,13 @@ export class MindmapView extends ItemView {
     this.requestSave();
   }
 
-  private async openNodeLinks(node: MindmapNode, event?: MouseEvent): Promise<void> {
+  private async openNodeLinks(node: MindmapNode, event?: MouseEvent, openInNewTab = false): Promise<void> {
     const links = this.getNodeLinks(node);
     if (links.length === 0) {
       return;
     }
     if (links.length === 1) {
-      await this.openLinkedTarget(links[0].target);
+      await this.openLinkedTarget(links[0].target, openInNewTab);
       return;
     }
     const menu = new Menu();
@@ -5515,7 +5523,7 @@ export class MindmapView extends ItemView {
       menu.addItem((item) => {
         item.setTitle(link.label || link.target || `链接 ${index + 1}`);
         item.onClick(() => {
-          void this.openLinkedTarget(link.target);
+          void this.openLinkedTarget(link.target, openInNewTab);
         });
       });
     });
@@ -5842,7 +5850,6 @@ export class MindmapView extends ItemView {
           selection: { anchor: index, head: index + query.length },
           scrollIntoView: true
         });
-        this.noteEditorView.focus();
       }
       return;
     }
@@ -7112,7 +7119,6 @@ export class MindmapView extends ItemView {
           keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
           updateListener,
           editorMouseHandlers,
-          noteInlineImagePlugin(this.app),
           codeBlockPlugin,
           EditorView.lineWrapping,
           EditorView.theme({
@@ -8151,7 +8157,7 @@ export class MindmapView extends ItemView {
     }
   }
 
-  private async openLinkedTarget(rawPath: string): Promise<void> {
+  private async openLinkedTarget(rawPath: string, openInNewTab = false): Promise<void> {
     console.log('[MindmapView] 🎯 openLinkedTarget called with:', rawPath);
     const input = rawPath.trim();
     if (!input) {
@@ -8173,7 +8179,7 @@ export class MindmapView extends ItemView {
         return;
       }
       const nodeId = resolved.nodeId;
-      await this.openInternalTarget(resolved.file.path, true, this.file?.path ?? null, nodeId, this.selectedNodeId);
+      await this.openInternalTarget(resolved.file.path, openInNewTab, this.file?.path ?? null, nodeId, this.selectedNodeId);
       return;
     }
 
@@ -8187,7 +8193,7 @@ export class MindmapView extends ItemView {
         }
         const decodedPath = normalizePath(decodeURIComponent(fileParam));
         console.log('[MindmapView] Opening obsidian URL, decoded path:', decodedPath);
-        await this.openInternalTarget(decodedPath, true);
+        await this.openInternalTarget(decodedPath, openInNewTab);
         return;
       } catch {
         console.warn('[MindmapView] ⚠️ Failed to parse obsidian URL:', input);
@@ -8197,7 +8203,7 @@ export class MindmapView extends ItemView {
 
     const normalizedInput = normalizePath(input);
     console.log('[MindmapView] Opening internal target:', normalizedInput);
-    await this.openInternalTarget(normalizedInput, true);
+    await this.openInternalTarget(normalizedInput, openInNewTab);
   }
 
   private async openByLinkText(linktext: string, inNewTab: boolean): Promise<void> {
@@ -8266,6 +8272,10 @@ export class MindmapView extends ItemView {
       const existingLeaf = inNewTab ? null : (existingLeaves.find((leaf) => leaf === activeLeaf) ?? existingLeaves[0] ?? null);
       const canReuseCurrentLeaf = this.leaf.view.getViewType() === MINDMAP_VIEW_TYPE;
       const targetLeaf = existingLeaf ?? (inNewTab || !canReuseCurrentLeaf ? this.app.workspace.getLeaf(true) : this.leaf);
+
+      if (inNewTab) {
+        window.__mindmapNotesNewTabIntent = { until: Date.now() + 1500 };
+      }
 
       await targetLeaf.setViewState({
         type: MINDMAP_VIEW_TYPE,
@@ -8910,9 +8920,15 @@ export class MindmapView extends ItemView {
           }
         });
       });
+      menu.addItem((item) => {
+        item.setTitle("新页签跳转").setIcon("external-link").onClick(() => {
+          if (node) {
+            void this.openNodeLinks(node, undefined, true);
+          }
+        });
+      });
     }
     // menu.addItem((item) => {
-    //   item
     //     .setTitle("删除节点")
     //     .setIcon("trash")
     //     .onClick(() => {
