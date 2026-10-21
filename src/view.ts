@@ -2793,7 +2793,7 @@ export class MindmapView extends ItemView {
     this.canvasEl = this.layoutEl.createDiv({ cls: "mindmap-canvas" });
     const inbox = getMindmapPlugin(this.app as ObsidianAppWithPlugins)?.inbox;
     if (inbox) {
-      this.register(mountInboxPanel(this.app, this.containerEl, inbox, (id) => this.importInboxItem(id), (item) => { void this.openInboxDrawer(item); }, () => { void this.openInboxDrawer(); }, () => { void this.goBackFromLinkedTarget(); }, () => !!this.pendingFocusLinkedFromPath || this.navigationStack.length > 0, () => ({ fromPath: this.pendingFocusLinkedFromPath, fromNodeId: this.pendingFocusLinkedFromNodeId })));
+      this.register(mountInboxPanel(this.app, this.containerEl, inbox, (id) => this.importInboxItem(id), (item) => { void this.openInboxDrawer(item); }, () => { void this.openInboxDrawer(); }, () => { void this.goBackFromLinkedTarget(); }, () => !this.isRootMindmapView() && (!!this.pendingFocusLinkedFromPath || this.navigationStack.length > 0), () => ({ fromPath: this.pendingFocusLinkedFromPath, fromNodeId: this.pendingFocusLinkedFromNodeId })));
       const clearInboxDropTarget = (): void => {
         this.canvasEl.querySelectorAll(".is-inbox-drop-target").forEach((el) => {
           el.classList.remove("is-inbox-drop-target");
@@ -3590,6 +3590,13 @@ export class MindmapView extends ItemView {
     this.pendingFocusLinkedFromPath = nextState.focusLinkedFrom ? normalizePath(nextState.focusLinkedFrom) : null;
     this.pendingFocusLinkedFromNodeId = nextState.focusLinkedFromNodeId ?? null;
     this.pendingFocusNodeId = nextState.focusNodeId ?? null;
+    if (normalizePath(path) === normalizePath("root.mindmap")) {
+      this.pendingFocusLinkedFromPath = null;
+      this.pendingFocusLinkedFromNodeId = null;
+      this.pendingFocusNodeId = null;
+      this.navigationStack.length = 0;
+      this.backChain.clear();
+    }
 
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) {
@@ -4831,6 +4838,10 @@ export class MindmapView extends ItemView {
     return !!this.file
       && normalizePath(this.file.path) === normalizePath("root.mindmap")
       && node.id === this.doc?.root.id;
+  }
+
+  private isRootMindmapView(): boolean {
+    return !!this.file && normalizePath(this.file.path) === normalizePath("root.mindmap");
   }
 
   private clearRootMindmapRootNodeLinkTarget(): boolean {
@@ -8334,6 +8345,9 @@ export class MindmapView extends ItemView {
   }
 
   private async goBackFromLinkedTarget(): Promise<void> {
+    if (this.isRootMindmapView()) {
+      return;
+    }
     const linkedFrom = this.pendingFocusLinkedFromPath;
     if (linkedFrom) {
       const linkedFromNodeId = this.pendingFocusLinkedFromNodeId;
